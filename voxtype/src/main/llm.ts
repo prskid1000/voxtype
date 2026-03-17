@@ -1,5 +1,6 @@
 import http from 'http';
 import https from 'https';
+import { execSync } from 'child_process';
 
 const SYSTEM_PROMPT = `You are a text rewriter. The user gives you a raw voice transcript inside <transcript> tags. You rewrite it as clean text. You output ONLY the cleaned text. You do NOT reply to it, answer it, or comment on it.
 
@@ -38,40 +39,141 @@ CRITICAL RULES:
 16. EMPTY INPUT: If the transcript is empty, contains only filler words, or is completely unintelligible, output an empty string.`;
 
 let cachedModel: string | null = null;
+let availableModels: { id: string; state: string }[] = [];
 
-async function detectModel(lmStudioUrl: string): Promise<string> {
-  if (cachedModel) return cachedModel;
+export function getAvailableModels(): { id: string; state: string }[] {
+  return availableModels;
+}
 
+export function getCurrentLLMModel(): string | null {
+  return cachedModel;
+}
+
+export function setLLMModel(modelId: string) {
+  cachedModel = modelId;
+  console.log(`[VoxType] LLM model set to: ${modelId}`);
+}
+
+export async function ensureLMStudio(lmStudioUrl: string): Promise<boolean> {
+  const alive = await checkAlive(lmStudioUrl);
+  if (alive) return true;
+  console.log('[VoxType] LM Studio not running, attempting to start via lms CLI...');
+  try {
+    execSync('lms server start', { timeout: 15000, stdio: 'ignore' });
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      if (await checkAlive(lmStudioUrl)) {
+        console.log('[VoxType] LM Studio started successfully');
+        return true;
+      }
+    }
+  } catch (e) {
+    console.log('[VoxType] Could not start LM Studio:', e);
+  }
+  return false;
+}
+
+function checkAlive(lmStudioUrl: string): Promise<boolean> {
   const url = new URL('/v1/models', lmStudioUrl);
-
   return new Promise((resolve) => {
     const transport = url.protocol === 'https:' ? https : http;
-    const req = transport.request(url, { method: 'GET' }, (res) => {
+    const req = transport.request(url, { method: 'GET', timeout: 3000 }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
+
+export async function fetchModels(lmStudioUrl: string): Promise<{ id: string; state: string }[]> {
+  // Try v0 API first (all downloaded models with state)
+  const v0 = await fetchV0Models(lmStudioUrl);
+  if (v0.length > 0) {
+    availableModels = v0;
+    if (!cachedModel) {
+      cachedModel = pickSmallest(v0.map(m => m.id));
+      console.log(`[VoxType] Auto-selected smallest LLM: ${cachedModel}`);
+    }
+    return availableModels;
+  }
+  // Fallback to v1
+  const v1 = await fetchV1Models(lmStudioUrl);
+  availableModels = v1.map(id => ({ id, state: 'loaded' }));
+  if (!cachedModel && v1.length > 0) {
+    cachedModel = pickSmallest(v1);
+    console.log(`[VoxType] Auto-selected smallest LLM: ${cachedModel}`);
+  }
+  return availableModels;
+}
+
+function fetchV0Models(lmStudioUrl: string): Promise<{ id: string; state: string }[]> {
+  const base = new URL(lmStudioUrl);
+  const url = new URL('/api/v0/models', `${base.protocol}//${base.host}`);
+  return new Promise((resolve) => {
+    const transport = url.protocol === 'https:' ? https : http;
+    const req = transport.request(url, { method: 'GET', timeout: 5000 }, (res) => {
       const chunks: Buffer[] = [];
-      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
       res.on('end', () => {
         try {
           const json = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
-          const id = json.data?.[0]?.id;
-          if (id) {
-            cachedModel = id;
-            console.log(`[VoxType] LM Studio model: ${id}`);
-            resolve(id);
-            return;
-          }
-        } catch {}
-        resolve('qwen3.5-0.8b');
+          const models = (json.data || [])
+            .filter((m: any) => m.type !== 'embedding' && !m.id.includes('embed'))
+            .map((m: any) => ({ id: m.id as string, state: (m.state || 'unknown') as string }));
+          resolve(models);
+        } catch { resolve([]); }
       });
     });
-    req.on('error', () => resolve('qwen3.5-0.8b'));
+    req.on('error', () => resolve([]));
+    req.on('timeout', () => { req.destroy(); resolve([]); });
     req.end();
   });
+}
+
+function fetchV1Models(lmStudioUrl: string): Promise<string[]> {
+  const url = new URL('/v1/models', lmStudioUrl);
+  return new Promise((resolve) => {
+    const transport = url.protocol === 'https:' ? https : http;
+    const req = transport.request(url, { method: 'GET', timeout: 5000 }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+          resolve((json.data || []).map((m: any) => m.id as string));
+        } catch { resolve([]); }
+      });
+    });
+    req.on('error', () => resolve([]));
+    req.on('timeout', () => { req.destroy(); resolve([]); });
+    req.end();
+  });
+}
+
+function pickSmallest(modelIds: string[]): string {
+  if (modelIds.length === 0) return 'qwen3.5-0.8b';
+  const sizeRegex = /(\d+\.?\d*)\s*[bB]/;
+  const sorted = [...modelIds].sort((a, b) => {
+    const aMatch = a.match(sizeRegex);
+    const bMatch = b.match(sizeRegex);
+    return (aMatch ? parseFloat(aMatch[1]) : 999) - (bMatch ? parseFloat(bMatch[1]) : 999);
+  });
+  return sorted[0];
 }
 
 export async function enhance(transcript: string, lmStudioUrl: string): Promise<string> {
   if (!transcript.trim()) return '';
 
-  const model = await detectModel(lmStudioUrl);
+  // Ensure LM Studio is running
+  const alive = await ensureLMStudio(lmStudioUrl);
+  if (!alive) return transcript;
+
+  // Fetch models if needed
+  if (availableModels.length === 0) await fetchModels(lmStudioUrl);
+
+  const model = cachedModel || pickSmallest(availableModels.map(m => m.id));
   const url = new URL('/v1/chat/completions', lmStudioUrl);
 
   // Wrap transcript in XML tags so the model treats it as data, not conversation
