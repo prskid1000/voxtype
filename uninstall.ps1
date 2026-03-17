@@ -19,15 +19,13 @@ try {
     Write-Host "  [WARN] Could not remove scheduled tasks (may need admin)" -ForegroundColor Yellow
 }
 
-# Remove Claude Code MCP config
-$claudeConfig = Join-Path $env:USERPROFILE ".claude.json"
-if (Test-Path $claudeConfig) {
-    $config = Get-Content $claudeConfig -Raw | ConvertFrom-Json
-    if ($config.mcpServers.voicemode) {
-        $config.mcpServers.PSObject.Properties.Remove("voicemode")
-        $config | ConvertTo-Json -Depth 10 | Set-Content $claudeConfig -Encoding UTF8
-        Write-Host "  [OK] Removed VoiceMode from Claude Code config" -ForegroundColor Green
-    }
+# Remove Claude Code MCP config via CLI (safe — doesn't parse .claude.json)
+$claude = Get-Command claude -ErrorAction SilentlyContinue
+if ($claude) {
+    claude mcp remove voicemode --scope user 2>&1 | Out-Null
+    Write-Host "  [OK] Removed VoiceMode from Claude Code config" -ForegroundColor Green
+} else {
+    Write-Host "  [WARN] claude CLI not found — remove 'voicemode' MCP server manually" -ForegroundColor Yellow
 }
 
 # Remove VoxType data

@@ -288,37 +288,72 @@ Write-Ok "Scheduled tasks created"
 
 # --- Setup VoxType dictation app ---
 Write-Step "Setting up VoxType dictation overlay"
-$voxTypeDir = Join-Path $PSScriptRoot "voxtype"
-if (Test-Path "$voxTypeDir\package.json") {
+$voxTypeSrc = Join-Path $PSScriptRoot "voxtype"
+$voxTypeDest = Join-Path $InstallDir "voxtype"
+
+if (Test-Path "$voxTypeSrc\package.json") {
     # Check for Node.js
     $nodeExe = Get-Command node -ErrorAction SilentlyContinue
     if ($nodeExe) {
         Write-Ok "Node.js: $(node --version)"
 
-        # Install dependencies
-        Push-Location $voxTypeDir
+        # Build in source directory
+        Push-Location $voxTypeSrc
         Write-Host "    Installing npm dependencies..." -ForegroundColor DarkGray
         npm install --quiet 2>&1 | Out-Null
         if (Test-Path "node_modules\.bin\electron.cmd") {
             Write-Ok "Dependencies installed"
 
-            # Build
             Write-Host "    Building VoxType..." -ForegroundColor DarkGray
             npx tsc -p tsconfig.node.json 2>&1 | Out-Null
             npx vite build 2>&1 | Out-Null
             if (Test-Path "dist\main\main\index.js") {
                 Write-Ok "VoxType built"
-
-                # Create scheduled task
-                & "$voxTypeDir\create-scheduled-task.ps1" -VoxTypePath $voxTypeDir
-                Write-Ok "VoxType scheduled task created"
             } else {
-                Write-Warn "VoxType build failed — skipping auto-start setup"
+                Write-Warn "VoxType build failed — skipping"
+                Pop-Location
+                break
             }
         } else {
             Write-Warn "npm install failed — skipping VoxType setup"
+            Pop-Location
+            break
         }
         Pop-Location
+
+        # Copy built app to install directory
+        Write-Step "Copying VoxType to $voxTypeDest"
+        if (Test-Path $voxTypeDest) {
+            Remove-Item -Recurse -Force $voxTypeDest -ErrorAction SilentlyContinue
+        }
+        New-Item -ItemType Directory -Path $voxTypeDest -Force | Out-Null
+
+        # Copy only what's needed to run (not source)
+        $copyItems = @(
+            "dist",
+            "node_modules",
+            "resources",
+            "package.json",
+            "start-voxtype.vbs",
+            "start-voxtype.bat",
+            "create-scheduled-task.ps1"
+        )
+        foreach ($item in $copyItems) {
+            $src = Join-Path $voxTypeSrc $item
+            $dst = Join-Path $voxTypeDest $item
+            if (Test-Path $src) {
+                if ((Get-Item $src).PSIsContainer) {
+                    Copy-Item -Recurse -Force $src $dst
+                } else {
+                    Copy-Item -Force $src $dst
+                }
+            }
+        }
+        Write-Ok "VoxType copied to install directory"
+
+        # Create scheduled task pointing to install directory
+        & "$voxTypeDest\create-scheduled-task.ps1" -VoxTypePath $voxTypeDest
+        Write-Ok "VoxType scheduled task created"
     } else {
         Write-Warn "Node.js not found — skipping VoxType setup. Install from https://nodejs.org"
     }

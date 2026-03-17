@@ -67,6 +67,13 @@ voicemode-windows/
 ├── stt-venv/                     # faster-whisper-server
 ├── tts-venv/                     # Kokoro-FastAPI + PyTorch CUDA
 ├── Kokoro-FastAPI/               # Cloned repo + downloaded model
+├── voxtype/                      # VoxType app (copied from repo at setup)
+│   ├── dist/                     # Built Electron app
+│   ├── node_modules/             # Runtime dependencies
+│   ├── resources/                # Icons
+│   ├── start-voxtype.vbs         # VBS launcher (no console)
+│   ├── start-voxtype.bat         # Manual launcher
+│   └── create-scheduled-task.ps1 # Task creator
 ├── start-whisper-stt.bat         # Whisper startup (port 6600)
 ├── start-kokoro-tts.bat          # Kokoro startup (port 6500)
 └── voicemode.env                 # Env vars reference
