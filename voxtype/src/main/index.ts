@@ -1,5 +1,7 @@
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
 import { startHotkeyListener, stopHotkeyListener, setHotkeyMode, setHotkeyCombo } from './hotkey';
 import { transcribe } from './stt';
 import { enhance, fetchModels, ensureLMStudio } from './llm';
@@ -13,8 +15,33 @@ import { IPC, DEFAULT_SETTINGS, type AppSettings, type PillState } from '../shar
 app.commandLine.appendSwitch('enable-transparent-visuals');
 app.commandLine.appendSwitch('disable-gpu-compositing');
 
+// --- Settings persistence ---
+const SETTINGS_DIR = path.join(os.homedir(), '.voxtype');
+const SETTINGS_FILE = path.join(SETTINGS_DIR, 'settings.json');
+
+function loadSettings(): AppSettings {
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+      return { ...DEFAULT_SETTINGS, ...data };
+    }
+  } catch (e) {
+    console.error('[VoxType] Failed to load settings:', e);
+  }
+  return { ...DEFAULT_SETTINGS };
+}
+
+function saveSettings(s: AppSettings) {
+  try {
+    if (!fs.existsSync(SETTINGS_DIR)) fs.mkdirSync(SETTINGS_DIR, { recursive: true });
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('[VoxType] Failed to save settings:', e);
+  }
+}
+
 let mainWindow: BrowserWindow | null = null;
-let settings: AppSettings = { ...DEFAULT_SETTINGS };
+let settings: AppSettings = loadSettings();
 let cancelled = false;
 
 function createWindow() {
@@ -59,6 +86,7 @@ function createWindow() {
       const [x, y] = mainWindow!.getPosition();
       settings.pillX = x;
       settings.pillY = y;
+      saveSettings(settings);
     }, 300);
   });
 
@@ -144,6 +172,7 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.GET_SETTINGS, () => ({ ...settings }));
   ipcMain.handle(IPC.SET_SETTINGS, (_e, partial: Partial<AppSettings>) => {
     Object.assign(settings, partial);
+    saveSettings(settings);
     if (partial.hotkeyMode) setHotkeyMode(partial.hotkeyMode);
     if (partial.hotkey) setHotkeyCombo(partial.hotkey as AppSettings['hotkey']);
     return { ...settings };
@@ -154,7 +183,7 @@ app.whenReady().then(() => {
     .then(() => fetchModels(settings.lmStudioUrl))
     .catch(() => {})
     .finally(() => {
-      if (mainWindow) createTray(mainWindow, () => settings, (partial) => Object.assign(settings, partial));
+      if (mainWindow) createTray(mainWindow, () => settings, (partial) => { Object.assign(settings, partial); saveSettings(settings); });
     });
 
   // Hotkey listener
