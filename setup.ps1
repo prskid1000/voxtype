@@ -194,7 +194,7 @@ title Whisper STT Server (port $WhisperPort)
     $whisperVbs = Join-Path $InstallDir "start-whisper-stt.vbs"
     @"
 Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run """$($whisperBat.Replace('\','\\'))""", 0, False
+WshShell.Run """$($whisperBat.Replace('\','\\'))""", 0, True
 "@ | Set-Content $whisperVbs
     Write-Ok "Whisper STT ready on port $WhisperPort"
 }
@@ -283,7 +283,7 @@ cd /d %PROJECT_ROOT%
     $kokoroVbs = Join-Path $InstallDir "start-kokoro-tts.vbs"
     @"
 Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run """$($kokoroBat.Replace('\','\\'))""", 0, False
+WshShell.Run """$($kokoroBat.Replace('\','\\'))""", 0, True
 "@ | Set-Content $kokoroVbs
     Write-Ok "Kokoro TTS ready on port $KokoroPort"
 }
