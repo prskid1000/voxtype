@@ -293,6 +293,10 @@ export function resetAutoUnloadTimer(minutes: number, lmStudioUrl: string, whisp
                 await unloadWhisper(whisperUrl);
             } catch (_e) {}
         }
+        try {
+            const { unloadKokoro } = require('./kokoro-voice');
+            await unloadKokoro();
+        } catch (_e) {}
         if (autoUnloadCallback) autoUnloadCallback();
     }, minutes * 60 * 1000);
 }

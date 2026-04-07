@@ -52,7 +52,7 @@ Press your hotkey (default: **Ctrl+Win**), speak, release — text appears at yo
 - **Kokoro voice switching** — select from 15 curated voices; VoxType writes `VOICEMODE_VOICES=<voice_id>,alloy` to `~/.voicemode/voicemode.env` — the VoiceMode MCP server reads this file on each TTS call, so Claude Code's voice changes immediately without restart
 - **LLM enhancement** — after Whisper transcribes, the raw text is sent to LM Studio (`localhost:1234`) with an 11-rule system prompt + 10 examples to clean up fillers ("um", "like"), fix punctuation, format numbers/currency, and handle self-corrections — uses temperature 0 for deterministic output; auto-detects which model is loaded via `/v1/models`
 - **Model preload** — on startup, sends a dummy silent WAV to Whisper and a dummy "Hi" request to LM Studio in parallel, so both models are loaded and warm before first dictation; disable in tray to skip startup entirely for instant launch
-- **Auto-unload after idle** — configurable timer (5/10/15/30/60 min) that unloads both the LLM model (via LM Studio API) and kills the Whisper process after no dictation activity, freeing VRAM; the Whisper scheduled task is restarted so the server stays ready without a model loaded
+- **Auto-unload after idle** — configurable timer (5/10/15/30/60 min) that unloads all three models after no dictation activity, freeing VRAM: unloads the LLM model (via LM Studio API), kills the Whisper process, and kills the Kokoro TTS process; both the Whisper and Kokoro scheduled tasks are restarted so servers stay ready without models loaded
 - **Auto-stop on silence** — monitors RMS energy level during recording; stops after 2 seconds of continuous silence
 - **VAD noise gate** — before sending audio to Whisper, checks if RMS energy exceeds threshold and duration is >0.3s; skips empty recordings to save Whisper processing time
 - **Append mode** — when enabled, saves clipboard content before pasting and restores it after, effectively appending text at cursor position; when disabled, replaces current selection
@@ -85,7 +85,7 @@ Right-click the VoxType tray icon for full settings:
 | Kokoro voice | Submenu | Switches the TTS voice for Claude Code's VoiceMode MCP. Writes `VOICEMODE_VOICES=<id>,alloy` to `~/.voicemode/voicemode.env`. Takes effect on next MCP TTS call — no restart needed. |
 | LLM enhance | Toggle | Sends raw Whisper transcript to LM Studio (localhost:1234) for cleanup. Removes filler words, fixes punctuation, formats numbers. Disable for raw Whisper output. |
 | LLM model | Submenu | Select which LM Studio model to use. Shows all downloaded models with load state. Auto-selects smallest by parameter count. |
-| → Auto-unload after | Submenu | Unload both Whisper + LLM models after idle time (Disabled/5/10/15/30/60 min). Frees VRAM when not dictating. Timer resets after each use. |
+| → Auto-unload after | Submenu | Unload all models (Whisper + LLM + Kokoro) after idle time (Disabled/5/10/15/30/60 min). Frees VRAM when not dictating. Timer resets after each use. |
 | → Preload on startup | Toggle | Warm up Whisper (silent WAV) + LLM (dummy request) at launch. Disable to skip LM Studio connection on startup. |
 | → Refresh models | Click | Re-fetch model list from LM Studio. |
 | Append mode | Toggle | ON: saves clipboard, pastes text, restores clipboard (appends at cursor). OFF: replaces current selection via Ctrl+V. |

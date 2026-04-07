@@ -2,6 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { execSync } from 'child_process';
 
 const VOICEMODE_ENV = path.join(os.homedir(), '.voicemode', 'voicemode.env');
 const KOKORO_URL = 'http://127.0.0.1:6500';
@@ -83,6 +84,27 @@ export function setVoice(voiceId: string) {
 
   fs.writeFileSync(VOICEMODE_ENV, lines.join('\n'), 'utf-8');
   console.log(`[VoxType] Kokoro voice set to: ${voiceId}`);
+}
+
+/**
+ * Unload Kokoro TTS by killing the uvicorn process and restarting the scheduled task.
+ * The model reloads on the next TTS request.
+ */
+export async function unloadKokoro(): Promise<void> {
+  console.log('[VoxType] Unloading Kokoro TTS (restarting server without model)...');
+  try {
+    execSync('taskkill /IM uvicorn.exe /F', { timeout: 5000, stdio: 'ignore' });
+    console.log('[VoxType] Kokoro process killed');
+  } catch {
+    console.log('[VoxType] Kokoro process not running');
+  }
+  // Restart the scheduled task so the server is ready (model loads on first request)
+  try {
+    execSync('schtasks /Run /TN "VoiceMode-Kokoro-TTS"', { timeout: 5000, stdio: 'ignore' });
+    console.log('[VoxType] Kokoro task restarted (no model loaded)');
+  } catch {
+    console.log('[VoxType] Could not restart Kokoro task');
+  }
 }
 
 /**
