@@ -87,6 +87,43 @@ export function setVoice(voiceId: string) {
 }
 
 /**
+ * Preload Kokoro TTS by sending a short TTS request to warm up the model.
+ */
+export async function preloadKokoro(): Promise<void> {
+  console.log('[VoxType] Preloading Kokoro TTS model...');
+  const voice = getCurrentVoice();
+  const payload = JSON.stringify({
+    model: 'kokoro',
+    input: 'ok',
+    voice,
+  });
+  return new Promise((resolve) => {
+    const req = http.request(`${KOKORO_URL}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    }, (res) => {
+      // Drain response
+      res.on('data', () => {});
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          console.log('[VoxType] Kokoro TTS model preloaded');
+        } else {
+          console.log(`[VoxType] Kokoro preload returned ${res.statusCode} (non-fatal)`);
+        }
+        resolve();
+      });
+    });
+    req.on('error', (e) => {
+      console.log(`[VoxType] Kokoro preload failed (non-fatal): ${e.message}`);
+      resolve();
+    });
+    req.setTimeout(30000, () => { req.destroy(); resolve(); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+/**
  * Unload Kokoro TTS by killing the uvicorn process and restarting the scheduled task.
  * The model reloads on the next TTS request.
  */

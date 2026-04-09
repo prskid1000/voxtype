@@ -5,6 +5,7 @@ import os from 'os';
 import { startHotkeyListener, stopHotkeyListener, setHotkeyMode, setHotkeyCombo } from './hotkey';
 import { transcribe, preloadWhisper } from './stt';
 import { enhance, fetchModels, ensureLMStudio, preloadCurrentModel, resetAutoUnloadTimer, stopAutoUnloadTimer } from './llm';
+import { preloadKokoro } from './kokoro-voice';
 import { typeText } from './typer';
 import { createTray } from './tray';
 import { hasSpeech, estimateDuration } from './vad';
@@ -183,16 +184,19 @@ app.whenReady().then(() => {
     return { ...settings };
   });
 
-  // Preload: warm up Whisper + LLM in parallel, then build tray
+  // Preload: warm up Whisper + Kokoro + LLM in parallel, then build tray
   const whisperStartup = settings.preloadModel
     ? preloadWhisper(settings.whisperUrl).catch(() => {})
+    : Promise.resolve();
+  const kokoroStartup = settings.preloadModel
+    ? preloadKokoro().catch(() => {})
     : Promise.resolve();
   const llmStartup = settings.preloadModel
     ? ensureLMStudio(settings.lmStudioUrl)
         .then(() => fetchModels(settings.lmStudioUrl, settings.llmModel))
         .then(() => preloadCurrentModel(settings.lmStudioUrl))
     : Promise.resolve();
-  Promise.all([whisperStartup, llmStartup])
+  Promise.all([whisperStartup, kokoroStartup, llmStartup])
     .catch(() => {})
     .finally(() => {
       if (mainWindow) createTray(mainWindow, () => settings, (partial) => { Object.assign(settings, partial); saveSettings(settings); });
