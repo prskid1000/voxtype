@@ -156,6 +156,10 @@ voicemode-windows/
 - **Small LLM hallucination**: 0.8B models may occasionally rewrite instead of clean up. Temperature 0 + examples mitigate this.
 - **Whisper model download**: First use of a new model triggers a download (can take minutes for Large v3).
 
+## Workflow Rules
+
+- **Always rebuild VoxType dist after committing source changes.** The repo and install location are the same directory (`~/.voicemode-windows/`), and VoxType runs from `voxtype/dist/main/main/index.js`. Source edits in `voxtype/src/` have no effect at runtime until `npm run build:main` (and `npx vite build` for renderer changes) is executed. After every commit that touches `voxtype/src/`, run the build immediately so the next launch picks up the change.
+
 ## Common Tasks
 
 ### Run VoxType in dev mode
