@@ -298,7 +298,7 @@ class PillWindow(QWidget):
         if screen is None:
             return
         g = screen.availableGeometry()
-        margin = 8             # sits just above the taskbar, not flush
+        margin = 56            # sits well above the taskbar
         x = g.x() + (g.width() - self.width()) // 2
         y = g.y() + g.height() - self.height() - margin
         self.move(x, y)
