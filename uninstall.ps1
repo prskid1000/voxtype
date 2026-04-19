@@ -5,7 +5,7 @@
     optionally removes the install directory + user data.
 #>
 param(
-    [string]$InstallDir = "$env:USERPROFILE\.voicemode-windows"
+    [string]$InstallDir = "$env:USERPROFILE\.voxtype"
 )
 
 function Ok($msg)   { Write-Host "  [OK] $msg"   -ForegroundColor Green }
@@ -15,8 +15,9 @@ Write-Host "`n  VoxType Uninstaller`n" -ForegroundColor Cyan
 
 # 1. Stop + remove the VoxType scheduled task (cleanly stops child services)
 $tasks = @(
+    'VoxType',
+    # Legacy task names from previous install layouts
     'VoxType-Dictation',
-    # Legacy task names from the old multi-task layout
     'VoiceMode-Whisper-STT',
     'VoiceMode-Kokoro-TTS'
 )

@@ -15,8 +15,8 @@ direct LM Studio dependency any more.
 ## Quick start
 
 ```powershell
-git clone https://github.com/prskid1000/voicemode-windows.git "$env:USERPROFILE\.voicemode-windows"
-cd "$env:USERPROFILE\.voicemode-windows"
+git clone https://github.com/prskid1000/voxtype.git "$env:USERPROFILE\.voxtype"
+cd "$env:USERPROFILE\.voxtype"
 .\setup.ps1
 ```
 
@@ -28,7 +28,7 @@ cd "$env:USERPROFILE\.voicemode-windows"
 3. Create `stt-venv/` and `pip install faster-whisper-server` (~390 MB)
 4. Unless `-SkipKokoro`, clone Kokoro-FastAPI, create `tts-venv/`,
    install PyTorch + CUDA wheels (~5 GB), download the Kokoro model
-5. Register a single scheduled task `VoxType-Dictation` that launches
+5. Register a single scheduled task `VoxType` that launches
    `pythonw.exe -m voxtype` at logon (no console window)
 6. Seed `voxtype/data/settings.json` with your chosen Whisper model
 7. Start VoxType immediately

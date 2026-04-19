@@ -26,7 +26,7 @@ ServiceName = Literal["whisper", "kokoro"]
 DeviceMode = Literal["gpu", "cpu"]
 
 
-INSTALL_DIR = Path(os.path.expanduser("~")) / ".voicemode-windows"
+INSTALL_DIR = Path(os.path.expanduser("~")) / ".voxtype"
 STT_VENV    = INSTALL_DIR / "stt-venv"
 TTS_VENV    = INSTALL_DIR / "tts-venv"
 KOKORO_REPO = INSTALL_DIR / "Kokoro-FastAPI"

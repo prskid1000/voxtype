@@ -5,7 +5,7 @@
 .DESCRIPTION
     Installs Whisper STT and Kokoro TTS as Python venvs inside the install
     directory, installs the VoxType UI Python deps (PySide6 + pynput + …),
-    and registers a scheduled task `VoxType-Dictation` that auto-starts at
+    and registers a scheduled task `VoxType` that auto-starts at
     logon. VoxType itself owns the Whisper and Kokoro child processes —
     no separate scheduled tasks, no wrapper scripts.
 
@@ -13,7 +13,7 @@
     telecode's dual-protocol proxy for LLM transcript cleanup. No Node.js
     is required any more.
 .PARAMETER InstallDir
-    Where everything lives. Defaults to ~/.voicemode-windows (the repo dir
+    Where everything lives. Defaults to ~/.voxtype (the repo dir
     when this script is run from a clone).
 .PARAMETER WhisperModel
     Initial Whisper model. VoxType can switch later from the tray.
@@ -24,7 +24,7 @@
     for dictation; Kokoro is optional.
 #>
 param(
-    [string]$InstallDir   = "$env:USERPROFILE\.voicemode-windows",
+    [string]$InstallDir   = "$env:USERPROFILE\.voxtype",
     [string]$WhisperModel = "Systran/faster-whisper-small",
     [bool]  $GpuSupport   = $true,
     [switch]$SkipKokoro
@@ -212,7 +212,7 @@ if (-not $SkipKokoro) {
 
 # ─── Scheduled task ──────────────────────────────────────────────────
 
-Step "Registering scheduled task: VoxType-Dictation"
+Step "Registering scheduled task: VoxType"
 
 # pythonw.exe is the no-console GUI binary (ships with every Python install)
 # so the task runs fully hidden. VoxType spawns Whisper/Kokoro as child
@@ -223,7 +223,7 @@ if (-not (Test-Path $pythonwExe)) {
     $pythonwExe = $voxPython
 }
 
-$taskName = 'VoxType-Dictation'
+$taskName = 'VoxType'
 $username = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 # Tear down any existing task (idempotent install)
@@ -231,8 +231,8 @@ Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | ForEach-Ob
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 }
 
-# Tear down legacy tasks left over from the old multi-task layout
-foreach ($legacy in @('VoiceMode-Whisper-STT', 'VoiceMode-Kokoro-TTS')) {
+# Tear down legacy tasks left over from previous install layouts
+foreach ($legacy in @('VoxType-Dictation', 'VoiceMode-Whisper-STT', 'VoiceMode-Kokoro-TTS')) {
     if (Get-ScheduledTask -TaskName $legacy -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $legacy -Confirm:$false
         Ok "Removed legacy task: $legacy"

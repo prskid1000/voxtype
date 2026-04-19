@@ -25,7 +25,7 @@ becomes VoxType's enhance backend.
 ## Project layout
 
 ```
-voicemode-windows/
+voxtype/
 ├── setup.ps1                  # Idempotent installer: venvs + scheduled task
 ├── uninstall.ps1              # Reverse of setup
 ├── README.md                  # User-facing docs
@@ -232,7 +232,7 @@ takes ~10 s.
    + patch `api.py` tomllib lookup
 4. **Kokoro venv** (unless `-SkipKokoro`): clone repo, `tts-venv/`,
    install PyTorch (CUDA or CPU), pip install `-e .`, download model
-5. **Scheduled task** `VoxType-Dictation`: runs
+5. **Scheduled task** `VoxType`: runs
    `voxtype-venv\Scripts\pythonw.exe -m voxtype` at logon, hidden,
    with `RestartCount=3`
 6. **Seed settings**: `data/settings.json` created with chosen
@@ -243,7 +243,7 @@ to confirm.
 
 ## Uninstall (`uninstall.ps1`)
 
-- Unregisters `VoxType-Dictation` (and legacy tasks)
+- Unregisters `VoxType` (and legacy tasks)
 - Kills orphan `faster-whisper-server` / `uvicorn` / `pythonw` / `python`
   processes under `$InstallDir`
 - Interactively offers to delete:
@@ -258,7 +258,7 @@ No formal test suite yet. Manual smoke:
 
 ```powershell
 # stop the running task first if any
-Stop-ScheduledTask -TaskName VoxType-Dictation
+Stop-ScheduledTask -TaskName VoxType
 
 # run in foreground so stderr is visible
 .\voxtype-venv\Scripts\python.exe -m voxtype

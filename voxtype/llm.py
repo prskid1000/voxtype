@@ -11,6 +11,14 @@ Preserved from the TS original:
   - 4-stage JSON recovery on malformed responses
   - 2-retry loop with linear backoff
   - Sanity checks: empty output → original, 3× length blow-up → original
+
+Health tracking (mirrors telecode/voice/health.py):
+  - No startup probe, no background poll.
+  - `enhance()` calls `_record_success()` / `_record_failure(reason)`
+    after every real request. Default is optimistic (reachable=True,
+    last_checked=False) so the first enhance actually hits the proxy.
+  - `proxy_alive()` still exists for the "Test Proxy" button — an
+    explicit user action, not a background loop.
 """
 from __future__ import annotations
 
@@ -18,12 +26,76 @@ import collections
 import json
 import logging
 import re
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import aiohttp
 
 log = logging.getLogger("voxtype.llm")
+
+
+# ── Lazy health state ────────────────────────────────────────────────
+
+@dataclass
+class LLMStatus:
+    reachable: bool = True
+    last_checked: bool = False   # True after any real request (or manual test)
+    last_error: str = ""
+
+    def pill_text(self) -> str:
+        if not self.last_checked:
+            return "⚪ untested"
+        if self.reachable:
+            return "🟢 reachable"
+        return f"🔴 last call failed"
+
+
+_status = LLMStatus()
+_status_lock = threading.Lock()
+_on_status_change: list = []
+
+
+def get_status() -> LLMStatus:
+    with _status_lock:
+        return LLMStatus(_status.reachable, _status.last_checked, _status.last_error)
+
+
+def on_status_change(fn) -> None:
+    """Fire `fn()` whenever the status transitions. Callback should do no
+    Qt work directly — marshal to the main thread from inside."""
+    _on_status_change.append(fn)
+
+
+def _notify() -> None:
+    for fn in list(_on_status_change):
+        try:
+            fn()
+        except Exception:
+            pass
+
+
+def _record_success() -> None:
+    with _status_lock:
+        transition = not _status.last_checked or not _status.reachable
+        _status.reachable = True
+        _status.last_checked = True
+        _status.last_error = ""
+    if transition:
+        log.info("LLM proxy reachable")
+        _notify()
+
+
+def _record_failure(reason: str) -> None:
+    with _status_lock:
+        transition = not _status.last_checked or _status.reachable
+        _status.reachable = False
+        _status.last_checked = True
+        _status.last_error = reason
+    if transition:
+        log.info("LLM proxy UNREACHABLE (%s)", reason or "—")
+        _notify()
 
 _SYSTEM_PROMPT_PATH = Path(__file__).parent / "resources" / "system-prompt.md"
 _FALLBACK_SYSTEM_PROMPT = (
@@ -235,11 +307,13 @@ async def enhance(
                     content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
                     result = _clean_output(content, transcript)
                     _cache_set(cache_key, result)
+                    _record_success()
                     return result
             except Exception as exc:
                 last_exc = exc
                 log.info("LLM call failed (attempt %d): %s", attempt + 1, exc)
 
+    _record_failure(str(last_exc) if last_exc else "unknown")
     log.info("all retries failed, returning original. last error: %s", last_exc)
     return transcript
 
@@ -268,13 +342,23 @@ async def preload(proxy_url: str, model: str) -> None:
 
 
 async def proxy_alive(proxy_url: str, timeout: float = 3.0) -> bool:
-    """Best-effort health check against the telecode proxy's /v1/models."""
+    """Explicit user-triggered health check (wired to the "Test Proxy"
+    button). Updates the shared status the same way a real `enhance()`
+    call would, so the tray + settings pills flip immediately.
+
+    This is the ONLY non-request entry point that touches the proxy —
+    there is no startup probe or background loop."""
     url = proxy_url.rstrip("/") + "/v1/models"
     try:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=timeout),
         ) as session:
             async with session.get(url) as resp:
-                return resp.status == 200
-    except Exception:
+                if resp.status == 200:
+                    _record_success()
+                    return True
+                _record_failure(f"HTTP {resp.status}")
+                return False
+    except Exception as exc:
+        _record_failure(str(exc))
         return False
