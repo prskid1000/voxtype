@@ -30,13 +30,13 @@ from voxtype.types import PillState
 
 log = logging.getLogger("voxtype.pill")
 
-ORB_SIZE = 44
-REC_W, REC_H = 96, 36
+ORB_SIZE = 22
+REC_W, REC_H = 56, 20
 
-# Widget container must fit BOTH the orb (44x44) and the recording pill
-# (96x36); otherwise the taller idle orb gets clipped top-and-bottom.
-_W = max(REC_W, ORB_SIZE + 8)   # +8 for shadow breathing room
-_H = max(REC_H, ORB_SIZE + 8)
+# Widget container fits BOTH the idle orb (22x22) and the recording pill
+# (56x20) with a few px of breathing room so nothing clips at the edges.
+_W = max(REC_W, ORB_SIZE + 4)
+_H = max(REC_H, ORB_SIZE + 4)
 
 
 _BG = {
@@ -186,39 +186,36 @@ class PillWindow(QWidget):
     def _draw_idle(self, p: QPainter, cx: float, cy: float) -> None:
         breathe = 0.85 + 0.15 * math.sin(self._phase / 25.0)
         p.setPen(Qt.PenStyle.NoPen)
-        for r, a in ((7, 60), (5, 50), (3, 40)):
+        for r, a in ((3.5, 60), (2.5, 50), (1.5, 40)):
             p.setBrush(QBrush(QColor(170, 180, 200, int(a * breathe))))
             p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
 
     def _draw_recording(self, p: QPainter,
                          rx: float, ry: float, rw: float, rh: float) -> None:
         pulse = 0.6 + 0.4 * math.sin(self._phase / 8.0)
-        dot_r = 4.0
-        dot_x = rx + 14
+        dot_r = 2.4
+        dot_x = rx + 8
         dot_y = ry + rh / 2
         p.setPen(Qt.PenStyle.NoPen)
-        # Halo
         p.setBrush(QBrush(QColor(248, 113, 113, int(80 * pulse))))
-        p.drawEllipse(QRectF(dot_x - dot_r - 2, dot_y - dot_r - 2,
-                              2 * (dot_r + 2), 2 * (dot_r + 2)))
-        # Core
+        p.drawEllipse(QRectF(dot_x - dot_r - 1.2, dot_y - dot_r - 1.2,
+                              2 * (dot_r + 1.2), 2 * (dot_r + 1.2)))
         p.setBrush(QBrush(QColor(248, 113, 113)))
         p.drawEllipse(QRectF(dot_x - dot_r, dot_y - dot_r, 2 * dot_r, 2 * dot_r))
-        # Waveform bars
         bar_count = 11
-        bar_x = rx + 28
+        bar_x = rx + 16
         for i in range(bar_count):
-            h = 4.0 + 10.0 * abs(math.sin((self._phase + i * 4) / 6.0))
-            alpha = int(90 + 140 * (h - 4.0) / 10.0)
+            h = 2.0 + 6.0 * abs(math.sin((self._phase + i * 4) / 6.0))
+            alpha = int(90 + 140 * (h - 2.0) / 6.0)
             p.setBrush(QBrush(QColor(248, 113, 113, max(40, min(alpha, 235)))))
-            p.drawRoundedRect(QRectF(bar_x + i * 4, ry + rh / 2 - h / 2, 2.2, h), 1, 1)
+            p.drawRoundedRect(QRectF(bar_x + i * 3, ry + rh / 2 - h / 2, 1.6, h), 0.8, 0.8)
 
     def _draw_processing(self, p: QPainter, cx: float, cy: float) -> None:
-        pen = QPen(QColor(245, 158, 11), 2.2)
+        pen = QPen(QColor(245, 158, 11), 1.6)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
-        r = 10.0
+        r = 5.0
         start = (self._phase * 12) % 360
         p.drawArc(QRectF(cx - r, cy - r, 2 * r, 2 * r),
                   int(start * 16), int(110 * 16))
@@ -226,43 +223,40 @@ class PillWindow(QWidget):
     def _draw_enhancing(self, p: QPainter, cx: float, cy: float) -> None:
         twinkle = 0.75 + 0.25 * math.sin(self._phase / 7.0)
         p.setPen(Qt.PenStyle.NoPen)
-        # Vertical diamond
         v = QPainterPath()
-        v.moveTo(cx,      cy - 10); v.lineTo(cx + 2,  cy)
-        v.lineTo(cx,      cy + 10); v.lineTo(cx - 2,  cy)
+        v.moveTo(cx,     cy - 5); v.lineTo(cx + 1, cy)
+        v.lineTo(cx,     cy + 5); v.lineTo(cx - 1, cy)
         v.closeSubpath()
         p.setBrush(QBrush(QColor(167, 139, 250, int(230 * twinkle))))
         p.drawPath(v)
-        # Horizontal diamond
         h = QPainterPath()
-        h.moveTo(cx - 10, cy); h.lineTo(cx,      cy - 2)
-        h.lineTo(cx + 10, cy); h.lineTo(cx,      cy + 2)
+        h.moveTo(cx - 5, cy); h.lineTo(cx,     cy - 1)
+        h.lineTo(cx + 5, cy); h.lineTo(cx,     cy + 1)
         h.closeSubpath()
         p.setBrush(QBrush(QColor(129, 140, 248, int(178 * twinkle))))
         p.drawPath(h)
-        # Center flare
         p.setBrush(QBrush(QColor(196, 181, 253)))
-        p.drawEllipse(QRectF(cx - 1.5, cy - 1.5, 3, 3))
+        p.drawEllipse(QRectF(cx - 0.8, cy - 0.8, 1.6, 1.6))
 
     def _draw_typing(self, p: QPainter, cx: float, cy: float) -> None:
-        pen = QPen(QColor(52, 211, 153), 2.6)
+        pen = QPen(QColor(52, 211, 153), 1.8)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         path = QPainterPath()
-        path.moveTo(cx - 8, cy + 0.5)
-        path.lineTo(cx - 2, cy + 6)
-        path.lineTo(cx + 8, cy - 6)
+        path.moveTo(cx - 4, cy + 0.3)
+        path.lineTo(cx - 1, cy + 3)
+        path.lineTo(cx + 4, cy - 3)
         p.drawPath(path)
 
     def _draw_error(self, p: QPainter, cx: float, cy: float) -> None:
-        jitter = 0.6 * math.sin(self._phase / 2.0)
+        jitter = 0.3 * math.sin(self._phase / 2.0)
         p.translate(jitter, 0)
         path = QPainterPath()
-        path.moveTo(cx + 1, cy - 9); path.lineTo(cx - 4, cy + 1)
-        path.lineTo(cx - 1, cy + 1); path.lineTo(cx - 2, cy + 9)
-        path.lineTo(cx + 4, cy - 1); path.lineTo(cx + 1, cy - 1)
+        path.moveTo(cx + 0.5, cy - 4.5); path.lineTo(cx - 2,   cy + 0.5)
+        path.lineTo(cx - 0.5, cy + 0.5); path.lineTo(cx - 1,   cy + 4.5)
+        path.lineTo(cx + 2,   cy - 0.5); path.lineTo(cx + 0.5, cy - 0.5)
         path.closeSubpath()
         p.setBrush(QBrush(QColor(248, 113, 113)))
         p.setPen(Qt.PenStyle.NoPen)

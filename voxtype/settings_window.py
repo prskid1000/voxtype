@@ -163,21 +163,53 @@ def _slider_float(path: str, lo: float, hi: float, step: float = 0.1,
     return w
 
 
-def _spin_idle(path: str) -> QWidget:
-    """Int seconds spinbox with a 'never' label when 0."""
+def _spin_idle(path: str, default_sec: int = 300) -> QWidget:
+    """Auto-unload composite: [Enabled] + [N s spinbox].
+
+    Storage: the same int field (e.g. whisper_idle_unload_sec).
+      0          → auto-unload disabled
+      > 0        → auto-unload after N seconds
+
+    UI:
+      - Checkbox "Auto-Unload" drives enabled state
+      - Spinbox is greyed out when checkbox unchecked
+      - Last positive value is remembered in `_remembered` so toggling
+        OFF→ON restores the previous duration, not the default
+    """
     s = config.load()
     cur = int(getattr(s, path, 0))
+
     w = QWidget()
     l = QHBoxLayout(w); l.setContentsMargins(0, 0, 0, 0); l.setSpacing(10)
+
+    cb = QCheckBox("Auto-Unload")
+    cb.setChecked(cur > 0)
+
     sp = QSpinBox()
-    sp.setRange(0, 86400)
+    sp.setRange(1, 86400)
     sp.setSingleStep(30)
     sp.setSuffix(" s")
-    sp.setSpecialValueText("never")
-    sp.setValue(cur)
-    sp.valueChanged.connect(lambda v, p=path: config.patch(p, int(v)))
-    l.addWidget(sp)
-    l.addStretch(1)
+    sp.setEnabled(cur > 0)
+    sp.setValue(cur if cur > 0 else default_sec)
+
+    # Remember last nonzero value for checkbox toggling
+    state = {"remembered": cur if cur > 0 else default_sec}
+
+    def _on_spin(v: int) -> None:
+        state["remembered"] = int(v)
+        if cb.isChecked():
+            config.patch(path, int(v))
+    sp.valueChanged.connect(_on_spin)
+
+    def _on_cb(checked: bool) -> None:
+        sp.setEnabled(checked)
+        if checked:
+            config.patch(path, int(state["remembered"]))
+        else:
+            config.patch(path, 0)
+    cb.toggled.connect(_on_cb)
+
+    l.addWidget(cb); l.addWidget(sp); l.addStretch(1)
     return w
 
 

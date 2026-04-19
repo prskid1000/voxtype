@@ -118,6 +118,7 @@ with `taskkill /T` first, then `/F` if needed.
 ⬡/⬢ Whisper ▸ status + port + Restart
 ⬡/⬢ Kokoro  ▸ status + port + Restart
 ⬡/⬢ LLM     ▸ proxy model + Test Proxy Connection
+⬢   Pill    ▸ Hide Pill / Show Pill + Reset Position
 ─
 Open Settings Window   (default left-click)
 ─
@@ -127,9 +128,20 @@ Quit VoxType
 The Settings window (left-click tray, or Open Settings Window) is a
 frameless dark window with a sidebar:
 
-- **Dictation** — hotkey mode, auto-stop on silence, VAD, append mode, save history
-- **Services** — Whisper + Kokoro enabled / port / model / device with Restart buttons
-- **LLM** — enhance on/off, screen context, proxy URL + model, Test Proxy Connection
+- **Dictation** — hotkey mode, live **Rebind** button (press 1–2 keys
+  to capture), auto-stop on silence with **duration slider** (0.5–5 s),
+  VAD, append mode, save history
+- **Services** — Whisper + Kokoro enable / port / model / device +
+  **Auto-Start On Boot** + **Auto-Unload** (checkbox-plus-spinbox:
+  unchecked = never unload; checked = stop after N s of no requests,
+  respawn on next use). Restart buttons.
+- **LLM** — enhance on/off, screen context, proxy URL + model, Test
+  Proxy Connection. No background probing — health state updates on
+  real enhance() requests (or the Test button).
+- **History** — saved transcripts with 📋 Raw / 📋 Final copy icons.
+- **Logs** — live-tailing voxtype.log / voxtype.log.prev with level
+  coloring, traceback highlighting, URLs. Follow / Clear / Open
+  Externally / Reveal Folder.
 
 Every toggle writes through to `data/settings.json` atomically and
 calls `config.reload()` — effective on the next request. Port changes
