@@ -107,9 +107,11 @@ class Orchestrator(QObject):
         self.hotkey.set_combo(s.hotkey)
         self.hotkey.start()
 
-        # Boot services + probe proxy in background
+        # Lazy startup: we spawn the Whisper/Kokoro child processes that
+        # VoxType owns, but we do NOT probe the LLM proxy or warm up any
+        # model. All health state is populated by real requests (first
+        # dictation → Whisper; enhance_enabled + first hotkey → LLM proxy).
         self._loop.submit(self._boot_sidecars())
-        self._probe_proxy()
 
     # ── Pipeline ─────────────────────────────────────────────────────
 
@@ -117,15 +119,28 @@ class Orchestrator(QObject):
         """Hotkey pressed — start recording."""
         if self.recorder.recording:
             return
-        log.info("hotkey down — start recording")
+        s = config.load()
+        silence_dur = float(s.silence_duration_sec) if s.auto_stop_on_silence else 0.0
+        log.info("hotkey down — start recording (silence auto-stop: %s)",
+                 f"{silence_dur}s" if silence_dur else "off")
         try:
-            self.recorder.start()
+            self.recorder.start(
+                silence_duration=silence_dur,
+                on_silence=self._on_auto_silence,
+            )
         except Exception as exc:
             log.error("recorder failed to start: %s", exc)
             self._set_pill("error", "mic error")
             return
         self._recording_since = time.monotonic()
         self._set_pill("recording", "")
+
+    def _on_auto_silence(self) -> None:
+        """Called from a worker thread when the recorder hits
+        `silence_duration` seconds of quiet. Same code path as
+        hotkey-up so toggle + hold modes both work."""
+        log.info("silence auto-stop fired")
+        self._on_hotkey_up()
 
     def _on_hotkey_up(self) -> None:
         """Hotkey released — finalise capture + run the pipeline."""
@@ -153,6 +168,15 @@ class Orchestrator(QObject):
         """Async half of the dictation pipeline."""
         t0 = time.monotonic()
         raw = ""
+        # Idle-unload may have stopped Whisper; (re)spawn if needed.
+        try:
+            await self._ensure_whisper_running()
+        except Exception as exc:
+            log.error("Whisper spawn failed: %s", exc)
+            self._flash_error("Whisper failed to start")
+            return
+
+        services.mark_used("whisper")
         try:
             raw = await stt.transcribe(pcm, f"http://127.0.0.1:{s.whisper_port}")
             log.info("STT: %r", (raw[:120] + "…") if len(raw) > 120 else raw)
@@ -211,24 +235,43 @@ class Orchestrator(QObject):
     # ── Services / proxy ─────────────────────────────────────────────
 
     async def _boot_sidecars(self) -> None:
+        """Start the sidecar processes only if the user opted in AND
+        asked for them to be pre-started. With the new idle-unload knobs
+        we keep things cold by default; services come up on first use."""
         s = config.load()
+
+        # Register idle-unload thresholds even for services we haven't
+        # spawned yet — when they come up later, the watcher already knows
+        # their timeout.
+        services.set_idle_unload("whisper", s.whisper_idle_unload_sec)
+        services.set_idle_unload("kokoro",  s.kokoro_idle_unload_sec)
+        services.start_idle_watcher()
+
         tasks = []
-        if s.whisper_enabled:
+        if s.whisper_enabled and s.whisper_auto_start:
             tasks.append(services.start_whisper(services.WhisperConfig(
                 model=s.whisper_model, port=s.whisper_port, device=s.whisper_device,
             )))
-        if s.kokoro_enabled:
+        if s.kokoro_enabled and s.kokoro_auto_start:
             tasks.append(services.start_kokoro(services.KokoroConfig(
                 port=s.kokoro_port, device=s.kokoro_device,
             )))
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        # Warm up Whisper model with a silent WAV
-        if s.whisper_enabled and services.is_running("whisper"):
-            try:
-                await stt.preload(f"http://127.0.0.1:{s.whisper_port}")
-            except Exception:
-                pass
+        # No warm-up call. The first real request populates the model
+        # cache; latency is paid once on first hotkey press, not on boot.
+
+    async def _ensure_whisper_running(self) -> None:
+        """Idempotent: spawn Whisper if it's not already running. Called
+        lazily from the pipeline when we're about to transcribe."""
+        s = config.load()
+        if not s.whisper_enabled:
+            return
+        if services.is_running("whisper"):
+            return
+        await services.start_whisper(services.WhisperConfig(
+            model=s.whisper_model, port=s.whisper_port, device=s.whisper_device,
+        ))
 
     def _restart_service(self, name: str) -> None:
         s = config.load()

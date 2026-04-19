@@ -28,6 +28,8 @@ class AppSettings:
     hotkey_mode: HotkeyMode = "hold"
     hotkey: HotkeyCombo = field(default_factory=HotkeyCombo)
     auto_stop_on_silence: bool = True
+    silence_duration_sec: float = 1.5   # seconds of continuous silence
+                                         # before the recorder auto-stops
     vad_enabled: bool = True
     append_mode: bool = False
 
@@ -37,12 +39,19 @@ class AppSettings:
 
     # ── Whisper STT (child process) ──────────────────────────────────
     whisper_enabled: bool = True
+    whisper_auto_start: bool = False     # spawn at VoxType boot?
+                                         # False = lazy (first hotkey spawns it)
+    whisper_idle_unload_sec: int = 300   # 0 = never unload; otherwise
+                                         # stop the child after N seconds
+                                         # of no transcribe requests
     whisper_port: int = 6600
     whisper_model: str = "Systran/faster-whisper-small"
     whisper_device: DeviceMode = "gpu"
 
     # ── Kokoro TTS (child process, off by default) ───────────────────
     kokoro_enabled: bool = False
+    kokoro_auto_start: bool = False
+    kokoro_idle_unload_sec: int = 600
     kokoro_port: int = 6500
     kokoro_voice: str = "af_sky"
     kokoro_device: DeviceMode = "gpu"

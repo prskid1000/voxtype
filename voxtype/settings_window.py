@@ -137,6 +137,49 @@ def _spin(path: str, lo: int, hi: int, step: int = 1) -> QSpinBox:
     return sp
 
 
+def _slider_float(path: str, lo: float, hi: float, step: float = 0.1,
+                  suffix: str = " s") -> QWidget:
+    """Horizontal slider + live float readout, persisted to `path`."""
+    from PySide6.QtWidgets import QSlider
+    s = config.load()
+    cur = float(getattr(s, path, lo))
+    w = QWidget()
+    l = QHBoxLayout(w); l.setContentsMargins(0, 0, 0, 0); l.setSpacing(10)
+    slider = QSlider(Qt.Orientation.Horizontal)
+    n = int(round((hi - lo) / step))
+    slider.setRange(0, n)
+    slider.setSingleStep(1)
+    slider.setValue(int(round((cur - lo) / step)))
+    readout = QLabel(f"{cur:.1f}{suffix}")
+    readout.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; min-width: 52px;")
+    def _on(i: int) -> None:
+        val = round(lo + i * step, 2)
+        readout.setText(f"{val:.1f}{suffix}")
+        config.patch(path, val)
+    slider.valueChanged.connect(_on)
+    l.addWidget(slider, 1)
+    l.addWidget(readout)
+    return w
+
+
+def _spin_idle(path: str) -> QWidget:
+    """Int seconds spinbox with a 'never' label when 0."""
+    s = config.load()
+    cur = int(getattr(s, path, 0))
+    w = QWidget()
+    l = QHBoxLayout(w); l.setContentsMargins(0, 0, 0, 0); l.setSpacing(10)
+    sp = QSpinBox()
+    sp.setRange(0, 86400)
+    sp.setSingleStep(30)
+    sp.setSuffix(" s")
+    sp.setSpecialValueText("never")
+    sp.setValue(cur)
+    sp.valueChanged.connect(lambda v, p=path: config.patch(p, int(v)))
+    l.addWidget(sp)
+    l.addStretch(1)
+    return w
+
+
 def _combo(path: str, options: list[tuple[str, str]]) -> QComboBox:
     """Options: list of (value, label)."""
     s = config.load()
@@ -205,6 +248,11 @@ def _build_dictation() -> QWidget:
     body.addWidget(_row(_label("Auto-Stop On Silence",
         "In hold-mode, stop recording if the mic stays quiet for a few seconds."),
         _checkbox("auto_stop_on_silence", "Enabled")))
+    body.addWidget(_row(_label("Silence Duration",
+        "How many seconds of continuous quiet before auto-stop fires. "
+        "The timer only starts after VoxType has heard at least one speech "
+        "frame — a silent mic won't insta-stop."),
+        _slider_float("silence_duration_sec", 0.5, 5.0, 0.1)))
     body.addWidget(_row(_label("VAD",
         "Skip empty recordings — don't call Whisper if the buffer is pure silence."),
         _checkbox("vad_enabled", "Enabled")))
@@ -231,6 +279,15 @@ def _build_services(window) -> QWidget:
 
     w_card, w_body = _card("Whisper STT", "faster-whisper-server child process")
     w_body.addWidget(_row(_label("Enabled"), _checkbox("whisper_enabled", "Run Whisper as a child process")))
+    w_body.addWidget(_row(_label("Auto-Start On Boot",
+        "If off (default), Whisper spawns on the first hotkey press. "
+        "Turn on only if the first-transcribe warmup delay matters."),
+        _checkbox("whisper_auto_start", "Enabled")))
+    w_body.addWidget(_row(_label("Idle Unload",
+        "Stop the Whisper child after N seconds of no transcribe "
+        "requests. 0 = never. Next hotkey spawns it again. Same pattern "
+        "as telecode's llamacpp.idle_unload_sec."),
+        _spin_idle("whisper_idle_unload_sec")))
     w_body.addWidget(_row(_label("Port"), _spin("whisper_port", 1024, 65535)))
     w_body.addWidget(_row(_label("Model"),
         _combo("whisper_model", [(m, lab) for m, lab in WHISPER_MODELS])))
@@ -244,6 +301,14 @@ def _build_services(window) -> QWidget:
 
     k_card, k_body = _card("Kokoro TTS", "Optional. Off by default.")
     k_body.addWidget(_row(_label("Enabled"), _checkbox("kokoro_enabled", "Run Kokoro as a child process")))
+    k_body.addWidget(_row(_label("Auto-Start On Boot",
+        "If off (default), Kokoro spawns on first TTS request. "
+        "Turn on if another tool will hit the port continuously."),
+        _checkbox("kokoro_auto_start", "Enabled")))
+    k_body.addWidget(_row(_label("Idle Unload",
+        "Stop the Kokoro child after N seconds of no speak requests. "
+        "0 = never."),
+        _spin_idle("kokoro_idle_unload_sec")))
     k_body.addWidget(_row(_label("Port"), _spin("kokoro_port", 1024, 65535)))
     k_body.addWidget(_row(_label("Voice"),
         _combo("kokoro_voice", [(v, lab) for v, lab in FEATURED_VOICES])))

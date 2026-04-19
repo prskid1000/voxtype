@@ -64,11 +64,72 @@ class _Managed:
     stopping: bool = False
     restart_count: int = 0
     restart_task: asyncio.Task | None = None
+    # Idle-unload bookkeeping
+    last_used: float = 0.0          # time.monotonic() of last mark_used()
+    idle_unload_sec: int = 0        # 0 = never unload
 
 
 _services: dict[ServiceName, _Managed] = {}
 _status_listeners: list[Callable[[ServiceStatus], None]] = []
 _lock = threading.Lock()
+
+# Single watcher thread started by start_idle_watcher(); checks every
+# IDLE_WATCH_INTERVAL seconds. No pressure on the event loop.
+_idle_watcher_started = False
+IDLE_WATCH_INTERVAL = 30.0
+
+
+def mark_used(name: ServiceName) -> None:
+    """Call before every real request so the idle watcher doesn't stop
+    the service in the middle of active usage. Cheap (monotonic())."""
+    m = _services.get(name)
+    if m is not None:
+        m.last_used = time.monotonic()
+
+
+def set_idle_unload(name: ServiceName, seconds: int) -> None:
+    """Set per-service idle-unload threshold. 0 = never unload."""
+    with _lock:
+        m = _services.setdefault(name, _Managed(name=name))
+        m.idle_unload_sec = max(0, int(seconds))
+
+
+def start_idle_watcher() -> None:
+    """Spawn the shared watcher thread (idempotent)."""
+    global _idle_watcher_started
+    if _idle_watcher_started:
+        return
+    _idle_watcher_started = True
+
+    def _loop() -> None:
+        while True:
+            try:
+                time.sleep(IDLE_WATCH_INTERVAL)
+                now = time.monotonic()
+                for name, m in list(_services.items()):
+                    if m.idle_unload_sec <= 0:
+                        continue
+                    if not m.proc or m.proc.poll() is not None:
+                        continue
+                    if m.last_used <= 0:
+                        # never used yet — start the clock from spawn time
+                        m.last_used = now
+                        continue
+                    idle = now - m.last_used
+                    if idle >= m.idle_unload_sec:
+                        log.info("%s idle for %.0fs ≥ %ds — unloading",
+                                 name, idle, m.idle_unload_sec)
+                        # Schedule stop on a short-lived thread so we don't
+                        # block the watcher loop.
+                        threading.Thread(
+                            target=lambda n=name: asyncio.run(stop_service(n)),
+                            daemon=True,
+                        ).start()
+            except Exception as exc:
+                log.debug("idle watcher tick failed: %s", exc)
+
+    threading.Thread(target=_loop, daemon=True,
+                     name="voxtype-idle-watcher").start()
 
 
 def on_status_change(fn: Callable[[ServiceStatus], None]) -> None:
