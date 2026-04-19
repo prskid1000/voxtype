@@ -33,10 +33,11 @@ log = logging.getLogger("voxtype.pill")
 ORB_SIZE = 22
 REC_W, REC_H = 56, 20
 
-# Widget container fits BOTH the idle orb (22x22) and the recording pill
-# (56x20) with a few px of breathing room so nothing clips at the edges.
-_W = max(REC_W, ORB_SIZE + 4)
-_H = max(REC_H, ORB_SIZE + 4)
+# The widget resizes per-state so the translucent window bounds never
+# extend past the drawn shape (avoids the DWM frame Windows paints
+# around any empty translucent area). Padding is zero except for a 1px
+# cushion so antialiased edges aren't clipped.
+_PAD = 1
 
 
 _BG = {
@@ -69,11 +70,11 @@ class PillWindow(QWidget):
             | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        # Container sized for the LARGER of the two shapes (orb vs
-        # recording pill) so neither gets clipped. Both draw centered
-        # inside so the widget never needs to resize.
-        self.setFixedSize(QSize(_W, _H))
+        # Start at idle size; _resize_for_state() re-sizes on state flip
+        # so the translucent window bounds never exceed the drawn shape.
+        self._resize_for_state("idle")
 
         self._state: PillState = "idle"
         self._message: str = ""
@@ -92,12 +93,29 @@ class PillWindow(QWidget):
     # ── Public API ───────────────────────────────────────────────────
 
     def set_state(self, state: PillState, message: str = "") -> None:
+        prev = self._state
         self._state = state
         self._message = message
+        # Resize on shape change (orb ↔ pill) and recenter around the
+        # previous visual center so the orb doesn't appear to jump.
+        shape_changed = (prev == "recording") != (state == "recording")
+        if shape_changed:
+            old_center = self.frameGeometry().center()
+            self._resize_for_state(state)
+            new_rect = self.frameGeometry()
+            new_rect.moveCenter(old_center)
+            self.move(new_rect.topLeft())
         if not self._force_hidden:
             self.show()
             self.raise_()
         self.update()
+
+    def _resize_for_state(self, state: PillState) -> None:
+        if state == "recording":
+            w, h = REC_W + 2 * _PAD, REC_H + 2 * _PAD
+        else:
+            w, h = ORB_SIZE + 2 * _PAD, ORB_SIZE + 2 * _PAD
+        self.setFixedSize(QSize(w, h))
 
     def reset_position(self) -> None:
         self._center_bottom()
