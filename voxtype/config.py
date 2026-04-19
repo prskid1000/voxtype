@@ -1,9 +1,15 @@
 """Settings file I/O — atomic write + hot-reload, mirroring telecode's
 config.py pattern.
 
-Storage path: %USERPROFILE%\\.voxtype\\settings.json
-History path: %USERPROFILE%\\.voxtype\\history.json
-Log path:     %USERPROFILE%\\.voxtype\\voxtype.log
+Storage lives alongside the source tree under `voxtype/data/`
+(repo-relative), so settings, history, and logs travel with the
+checkout. The `data/` dir is in .gitignore. Users who need to move the
+storage elsewhere can set the VOXTYPE_DATA_DIR environment variable.
+
+Resolved paths:
+  {data_dir}/settings.json
+  {data_dir}/history.json
+  {data_dir}/voxtype.log   (rotated to voxtype.log.prev on restart)
 """
 from __future__ import annotations
 
@@ -14,11 +20,13 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from voxtype_py.types import AppSettings
+from voxtype.types import AppSettings
 
 log = logging.getLogger("voxtype.config")
 
-_ROOT = Path(os.path.expanduser("~")) / ".voxtype"
+# Default: voxtype/data/ in the repo. Override with $VOXTYPE_DATA_DIR.
+_DEFAULT_ROOT = Path(__file__).resolve().parent / "data"
+_ROOT = Path(os.environ.get("VOXTYPE_DATA_DIR", str(_DEFAULT_ROOT)))
 _SETTINGS_PATH = _ROOT / "settings.json"
 _LOCK = threading.Lock()
 _CACHE: AppSettings | None = None

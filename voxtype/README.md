@@ -21,8 +21,8 @@ any app. Drop-in replacement for the `voxtype/` Electron app.
 ## Run
 
 ```powershell
-pip install -r voxtype_py/requirements.txt
-python -m voxtype_py
+pip install -r voxtype/requirements.txt
+python -m voxtype
 ```
 
 Data dir: `%USERPROFILE%\.voxtype\`
@@ -34,7 +34,7 @@ Data dir: `%USERPROFILE%\.voxtype\`
 ## Files
 
 ```
-voxtype_py/
+voxtype/
   main.py              # Orchestrator: Qt loop + asyncio-on-a-thread
   audio.py             # sounddevice → raw 16 kHz mono int16 PCM
   hotkey.py            # pynput.keyboard.Listener (hold / toggle / capture)

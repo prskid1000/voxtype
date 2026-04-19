@@ -20,9 +20,9 @@ from PySide6.QtCore import Qt, QTimer, QPoint, Signal, QSize
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QMouseEvent
 from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout, QVBoxLayout
 
-from voxtype_py import config
-from voxtype_py.qt_theme import ACCENT, ERR, WARN, OK, FG, BG_CARD, BORDER, FG_DIM
-from voxtype_py.types import PillState
+from voxtype import config
+from voxtype.qt_theme import ACCENT, ERR, WARN, OK, FG, BG_CARD, BORDER, FG_DIM
+from voxtype.types import PillState
 
 log = logging.getLogger("voxtype.pill")
 

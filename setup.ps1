@@ -4,10 +4,14 @@
     VoxType Setup — local voice dictation overlay for Windows.
 .DESCRIPTION
     Installs Whisper STT and Kokoro TTS as Python venvs inside the install
-    directory, builds the VoxType Electron app, and registers a single
-    scheduled task (VoxType-Dictation) that auto-starts at logon. VoxType
-    itself owns the Whisper and Kokoro child processes — no separate
-    scheduled tasks, no .bat/.vbs wrapper scripts.
+    directory, installs the VoxType UI Python deps (PySide6 + pynput + …),
+    and registers a scheduled task `VoxType-Dictation` that auto-starts at
+    logon. VoxType itself owns the Whisper and Kokoro child processes —
+    no separate scheduled tasks, no wrapper scripts.
+
+    The Electron UI has been replaced by a PySide6 UI that talks to
+    telecode's dual-protocol proxy for LLM transcript cleanup. No Node.js
+    is required any more.
 .PARAMETER InstallDir
     Where everything lives. Defaults to ~/.voicemode-windows (the repo dir
     when this script is run from a clone).
@@ -36,7 +40,7 @@ function Fail($msg) { Write-Host "    [FAIL] $msg" -ForegroundColor Red; exit 1 
 Write-Host @"
 
   VoxType Setup
-  Local voice dictation for Windows
+  Local voice dictation for Windows (Python / PySide6)
   =========================================
 
 "@ -ForegroundColor Magenta
@@ -75,11 +79,6 @@ foreach ($c in $candidates) {
 if (-not $pythonExe) { Fail "Python 3.10+ not found. Install from https://python.org" }
 Ok "Python: $(& $pythonExe --version 2>&1) ($pythonExe)"
 
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Fail "Node.js not found. Install from https://nodejs.org (18+)"
-}
-Ok "Node: $(node --version)"
-
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Fail "git not found. Install from https://git-scm.com"
 }
@@ -107,6 +106,28 @@ Step "Install directory: $InstallDir"
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Ok "Ready"
 
+# ─── VoxType UI venv (PySide6 + sounddevice + pynput + …) ────────────
+
+Step "Installing VoxType UI"
+$voxVenv    = Join-Path $InstallDir "voxtype-venv"
+$voxPython  = Join-Path $voxVenv "Scripts\python.exe"
+$voxTypeDir = Join-Path $InstallDir "voxtype"
+
+if (-not (Test-Path "$voxTypeDir\__main__.py")) {
+    Fail "voxtype/ not found at $voxTypeDir — run setup.ps1 from the repo root"
+}
+
+if (-not (Test-Path $voxPython)) {
+    & $pythonExe -m venv $voxVenv
+}
+
+Write-Host "    pip install (PySide6, pynput, sounddevice, numpy, Pillow, mss, aiohttp)..." -ForegroundColor DarkGray
+& $voxPython -m pip install --upgrade pip --quiet 2>&1 | Out-Null
+& "$voxVenv\Scripts\pip.exe" install -r "$voxTypeDir\requirements.txt" --quiet 2>&1 | Out-Null
+
+if (-not (Test-Path "$voxVenv\Lib\site-packages\PySide6")) { Fail "VoxType UI pip install failed" }
+Ok "VoxType UI deps installed"
+
 # ─── Whisper STT venv ────────────────────────────────────────────────
 
 Step "Installing Whisper STT"
@@ -118,15 +139,11 @@ if (-not (Test-Path "$sttVenv\Scripts\python.exe")) {
     & $pythonExe -m venv $sttVenv
 }
 
-# pip install is idempotent — it prints "Requirement already satisfied" and
-# exits in seconds when nothing needs downloading. Always run so version
-# updates get picked up.
 Write-Host "    pip install (skips download if up-to-date)..." -ForegroundColor DarkGray
 & "$sttVenv\Scripts\python.exe" -m pip install --upgrade pip --quiet 2>&1 | Out-Null
 & "$sttVenv\Scripts\pip.exe" install faster-whisper-server --quiet 2>&1 | Out-Null
 
 # Patch faster-whisper-server's tomllib lookup (PyPI packaging quirk).
-# This is a code edit, not pip — needs its own idempotency check.
 if (Test-Path $apiFile) {
     $content = Get-Content $apiFile -Raw
     if ($content -notmatch 'except FileNotFoundError') {
@@ -157,20 +174,16 @@ if (-not $SkipKokoro) {
     $uvicornExe = Join-Path $ttsVenv "Scripts\uvicorn.exe"
     $modelPath  = Join-Path $kokoroDir "api\src\models\v1_0\kokoro-v1_0.pth"
 
-    # 1. Clone Kokoro-FastAPI (skip if already there)
     if (-not (Test-Path "$kokoroDir\pyproject.toml")) {
         if (Test-Path $kokoroDir) { Remove-Item -Recurse -Force $kokoroDir }
         git clone --depth 1 https://github.com/remsky/Kokoro-FastAPI.git $kokoroDir 2>&1 | Out-Null
         if (-not (Test-Path "$kokoroDir\pyproject.toml")) { Fail "Failed to clone Kokoro-FastAPI" }
     }
 
-    # 2. Create venv (skip if exists)
     if (-not (Test-Path "$ttsVenv\Scripts\python.exe")) {
         & $pythonExe -m venv $ttsVenv
     }
 
-    # 3. pip install — idempotent. Fast on rerun (no download if installed),
-    # slow only on first install or when a new torch/Kokoro version exists.
     Write-Host "    pip install (skips download if up-to-date — first run is multi-GB)..." -ForegroundColor DarkGray
     & "$ttsVenv\Scripts\python.exe" -m pip install --upgrade pip --quiet 2>&1 | Out-Null
 
@@ -186,7 +199,6 @@ if (-not $SkipKokoro) {
 
     if (-not (Test-Path $uvicornExe)) { Fail "Kokoro install failed" }
 
-    # 4. Model download — file existence check (not a pip dep)
     if (-not (Test-Path $modelPath)) {
         Write-Host "    Downloading Kokoro model (313 MB)..." -ForegroundColor DarkGray
         & "$ttsVenv\Scripts\python.exe" "$kokoroDir\docker\scripts\download_model.py" `
@@ -198,37 +210,18 @@ if (-not $SkipKokoro) {
     Warn "Skipping Kokoro install (per -SkipKokoro)"
 }
 
-# ─── VoxType build (in-place — repo IS the install dir) ──────────────
-
-Step "Building VoxType"
-$voxTypeDir = Join-Path $InstallDir "voxtype"
-if (-not (Test-Path "$voxTypeDir\package.json")) {
-    Fail "voxtype/ not found at $voxTypeDir — run setup.ps1 from the repo root"
-}
-
-Push-Location $voxTypeDir
-Write-Host "    npm install..." -ForegroundColor DarkGray
-npm install --silent 2>&1 | Out-Null
-if (-not (Test-Path "node_modules\.bin\electron.cmd")) { Pop-Location; Fail "npm install failed" }
-
-Write-Host "    Compiling..." -ForegroundColor DarkGray
-npx tsc -p tsconfig.node.json 2>&1 | Out-Null
-npx vite build 2>&1 | Out-Null
-if (-not (Test-Path "dist\main\main\index.js")) { Pop-Location; Fail "VoxType build failed" }
-Pop-Location
-Ok "VoxType built in place ($voxTypeDir)"
-
-# ─── Single scheduled task ───────────────────────────────────────────
+# ─── Scheduled task ──────────────────────────────────────────────────
 
 Step "Registering scheduled task: VoxType-Dictation"
 
-# electron.exe is a GUI binary — no console window appears, so we don't
-# need a .vbs/.bat wrapper. The task runs at logon, hidden, with restart
-# on crash. VoxType then spawns Whisper/Kokoro as child processes itself.
-$electronExe = Join-Path $voxTypeDir "node_modules\electron\dist\electron.exe"
-$entryPoint  = Join-Path $voxTypeDir "dist\main\main\index.js"
-if (-not (Test-Path $electronExe)) { Fail "electron.exe missing at $electronExe" }
-if (-not (Test-Path $entryPoint))  { Fail "VoxType entry missing at $entryPoint" }
+# pythonw.exe is the no-console GUI binary (ships with every Python install)
+# so the task runs fully hidden. VoxType spawns Whisper/Kokoro as child
+# processes itself.
+$pythonwExe = $voxPython -replace 'python\.exe$','pythonw.exe'
+if (-not (Test-Path $pythonwExe)) {
+    Warn "pythonw.exe not found next to $voxPython — falling back to python.exe"
+    $pythonwExe = $voxPython
+}
 
 $taskName = 'VoxType-Dictation'
 $username = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -246,7 +239,7 @@ foreach ($legacy in @('VoiceMode-Whisper-STT', 'VoiceMode-Kokoro-TTS')) {
     }
 }
 
-$action    = New-ScheduledTaskAction -Execute $electronExe -Argument "`"$entryPoint`"" -WorkingDirectory $voxTypeDir
+$action    = New-ScheduledTaskAction -Execute $pythonwExe -Argument "-m voxtype" -WorkingDirectory $InstallDir
 $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $username
 $settings  = New-ScheduledTaskSettingsSet `
                 -AllowStartIfOnBatteries `
@@ -260,6 +253,26 @@ $principal = New-ScheduledTaskPrincipal -UserId $username -LogonType Interactive
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
     -Settings $settings -Principal $principal -Force | Out-Null
 Ok "Scheduled task registered (auto-start at logon)"
+
+# ─── Seed settings.json with chosen Whisper model ────────────────────
+
+$dataDir      = Join-Path $voxTypeDir "data"
+$settingsFile = Join-Path $dataDir    "settings.json"
+New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+if (-not (Test-Path $settingsFile)) {
+    & $voxPython -c @"
+import json, os
+from pathlib import Path
+import sys
+sys.path.insert(0, r'$InstallDir')
+from voxtype.config import load, save
+s = load()
+s.whisper_model = r'$WhisperModel'
+save(s)
+print('seeded', Path(r'$settingsFile'))
+"@ 2>&1 | Out-Null
+    Ok "Seeded settings.json (whisper model = $WhisperModel)"
+}
 
 # ─── Start now ───────────────────────────────────────────────────────
 
@@ -281,9 +294,11 @@ Write-Host @"
   Whisper auto-starts with VoxType. Kokoro is OFF by default —
   enable it from tray > Services > Kokoro if you want TTS.
 
-  Logs:
-    %USERPROFILE%\.voxtype\debug.log     (cleared on each start)
-    %USERPROFILE%\.voxtype\sessions.jsonl
-    %USERPROFILE%\.voxtype\history.json  (user-visible history)
+  LLM transcript cleanup is routed through telecode's proxy at
+  http://127.0.0.1:1235. Make sure telecode is running for the
+  enhance step to work.
+
+  Settings, history, and logs live in:
+    $voxTypeDir\data\
 
 "@ -ForegroundColor Green

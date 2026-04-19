@@ -23,7 +23,7 @@ from typing import Callable
 
 from pynput import keyboard
 
-from voxtype_py.types import HotkeyCombo, HotkeyMode
+from voxtype.types import HotkeyCombo, HotkeyMode
 
 log = logging.getLogger("voxtype.hotkey")
 

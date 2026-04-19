@@ -25,18 +25,18 @@ from typing import Optional
 from PySide6.QtCore import Qt, QObject, QTimer, Signal, Slot, QCoreApplication
 from PySide6.QtWidgets import QApplication
 
-from voxtype_py import config, debug_log, services, stt, llm
-from voxtype_py.audio import Recorder
-from voxtype_py.hotkey import HotkeyListener
-from voxtype_py.pill_window import PillWindow
-from voxtype_py.settings_window import SettingsWindow
-from voxtype_py.tray_menu import Tray
-from voxtype_py.typer import type_text
-from voxtype_py.vad import has_speech, estimate_duration
-from voxtype_py.screen_capture import capture_active_screen
-from voxtype_py.history import Entry, add as history_add, now as history_now
-from voxtype_py.types import AppSettings
-from voxtype_py import __version__
+from voxtype import config, debug_log, services, stt, llm
+from voxtype.audio import Recorder
+from voxtype.hotkey import HotkeyListener
+from voxtype.pill_window import PillWindow
+from voxtype.settings_window import SettingsWindow
+from voxtype.tray_menu import Tray
+from voxtype.typer import type_text
+from voxtype.vad import has_speech, estimate_duration
+from voxtype.screen_capture import capture_active_screen
+from voxtype.history import Entry, add as history_add, now as history_now
+from voxtype.types import AppSettings
+from voxtype import __version__
 
 log = logging.getLogger("voxtype.main")
 

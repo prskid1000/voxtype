@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from voxtype_py import config
+from voxtype import config
 
 log = logging.getLogger("voxtype.history")
 

@@ -20,11 +20,11 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QCheckBox, QSpinBox,
 )
 
-from voxtype_py import config
-from voxtype_py.qt_theme import QSS, BG, FG, FG_DIM, FG_MUTE, BORDER, BG_CARD
-from voxtype_py.types import AppSettings, HotkeyCombo
-from voxtype_py.whisper_model import WHISPER_MODELS
-from voxtype_py.kokoro_voice import FEATURED_VOICES
+from voxtype import config
+from voxtype.qt_theme import QSS, BG, FG, FG_DIM, FG_MUTE, BORDER, BG_CARD
+from voxtype.types import AppSettings, HotkeyCombo
+from voxtype.whisper_model import WHISPER_MODELS
+from voxtype.kokoro_voice import FEATURED_VOICES
 
 log = logging.getLogger("voxtype.settings_window")
 
@@ -281,7 +281,7 @@ def _build_llm(window) -> QWidget:
     status = QLabel(""); status.setStyleSheet(f"color: {FG_DIM};")
 
     def _ping():
-        from voxtype_py import llm
+        from voxtype import llm
         s = config.load()
         async def _do():
             alive = await llm.proxy_alive(s.proxy_url)
@@ -301,7 +301,7 @@ def _build_llm(window) -> QWidget:
 def _build_about() -> QWidget:
     scroll, _, layout = _page()
     card, body = _card("About", "VoxType (Python)")
-    from voxtype_py import __version__
+    from voxtype import __version__
     body.addWidget(QLabel(f"Version: {__version__}"))
     body.addWidget(QLabel(f"Data dir: {config.data_dir()}"))
     body.addWidget(QLabel("LLM: telecode proxy (http://127.0.0.1:1235)"))

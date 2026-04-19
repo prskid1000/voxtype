@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from voxtype_py import config
+from voxtype import config
 
 
 def install(level: int = logging.INFO) -> None:

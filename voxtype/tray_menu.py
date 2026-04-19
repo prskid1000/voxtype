@@ -16,8 +16,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from voxtype_py import config, services
-from voxtype_py.qt_theme import QSS
+from voxtype import config, services
+from voxtype.qt_theme import QSS
 
 log = logging.getLogger("voxtype.tray")
 
