@@ -291,14 +291,14 @@ class PillWindow(QWidget):
             self._center_bottom()
 
     def _center_bottom(self) -> None:
-        """Place at the center-bottom of the primary display, just above
-        the taskbar. `availableGeometry()` already excludes the taskbar,
-        so this margin is measured against the work-area bottom."""
+        """Place at the center-bottom of the primary display, right
+        above the taskbar. `availableGeometry()` excludes the taskbar,
+        so a small margin puts the pill hugging the bottom edge."""
         screen = self.screen() or None
         if screen is None:
             return
         g = screen.availableGeometry()
-        margin = 12            # px above the taskbar — was 80 (too high)
+        margin = 2             # essentially flush with the taskbar
         x = g.x() + (g.width() - self.width()) // 2
         y = g.y() + g.height() - self.height() - margin
         self.move(x, y)

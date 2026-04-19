@@ -254,8 +254,55 @@ def _drain(name: ServiceName, proc: subprocess.Popen) -> None:
 
 # ── Lifecycle ────────────────────────────────────────────────────────
 
+def _kill_orphan_on_port(port: int) -> None:
+    """If some process already owns `port` on Windows, kill it — that's
+    almost certainly a previous voxtype whisper/kokoro that didn't get
+    cleaned up (scheduled-task respawn race, hard reboot, etc). Without
+    this, the new child fails to bind forever and the pipeline hangs."""
+    if os.name != "nt":
+        return
+    try:
+        # `netstat -ano -p TCP` is faster + simpler than PowerShell here.
+        out = subprocess.check_output(
+            ["netstat.exe", "-ano", "-p", "TCP"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=5, text=True,
+        )
+    except Exception:
+        return
+    pids_to_kill: set[int] = set()
+    for line in out.splitlines():
+        cols = line.split()
+        if len(cols) < 5:
+            continue
+        if not cols[1].endswith(f":{port}"):
+            continue
+        if cols[3] != "LISTENING":
+            continue
+        try:
+            pids_to_kill.add(int(cols[4]))
+        except ValueError:
+            pass
+    for pid in pids_to_kill:
+        log.info("port %d orphan: killing PID %d", port, pid)
+        try:
+            subprocess.run(
+                ["taskkill.exe", "/PID", str(pid), "/F", "/T"],
+                capture_output=True, timeout=5.0, check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except Exception as exc:
+            log.warning("taskkill on PID %d failed: %s", pid, exc)
+
+
 async def _start_internal(m: _Managed) -> None:
     assert m.config is not None
+    # Free the port first — a previous voxtype instance may have left an
+    # orphan bound there (common after a hard reboot or Task Scheduler
+    # double-spawn). Without this, every bind attempt fails forever.
+    port = m.config.port  # type: ignore[union-attr]
+    _kill_orphan_on_port(port)
+
     exe = _whisper_exe() if m.name == "whisper" else _uvicorn_exe()
     if not exe.exists():
         m.last_error = f"executable missing: {exe}"
