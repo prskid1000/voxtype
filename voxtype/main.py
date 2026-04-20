@@ -83,6 +83,13 @@ class Orchestrator(QObject):
         self._app = app
         self._loop = loop
         self._recording_since: float = 0.0
+        # In-flight pipeline tracker. While this future is alive+unfinished
+        # we ignore new hotkey presses — neither Whisper nor llama.cpp
+        # handle mid-request cancellation reliably on our setup (Whisper's
+        # sync threadpool route can't be aborted at all, llama.cpp has
+        # ~1 s poll latency). Simpler + cleaner: the user can't start a
+        # new turn until the current one finishes or the timeouts fire.
+        self._pipeline_future = None  # type: ignore[var-annotated]
 
         self.recorder = Recorder()
 
@@ -124,9 +131,20 @@ class Orchestrator(QObject):
 
     # ── Pipeline ─────────────────────────────────────────────────────
 
+    def _pipeline_busy(self) -> bool:
+        fut = self._pipeline_future
+        return fut is not None and not fut.done()
+
     def _on_hotkey_down(self) -> None:
         """Hotkey pressed — start recording."""
         if self.recorder.recording:
+            return
+        if self._pipeline_busy():
+            # Previous turn is still processing (STT / LLM / paste).
+            # Ignore the hotkey rather than queue another request behind
+            # whatever is already in flight — see __init__ for the why.
+            log.info("hotkey down ignored — previous pipeline still running")
+            self._flash_error("Busy, please wait", dwell_ms=900)
             return
         s = config.load()
         silence_dur = float(s.silence_duration_sec) if s.auto_stop_on_silence else 0.0
@@ -171,7 +189,7 @@ class Orchestrator(QObject):
             return
 
         self._set_pill("processing", "")
-        self._loop.submit(self._pipeline(pcm, s))
+        self._pipeline_future = self._loop.submit(self._pipeline(pcm, s))
 
     async def _pipeline(self, pcm: bytes, s: AppSettings) -> None:
         """Async half of the dictation pipeline."""
