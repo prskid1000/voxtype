@@ -90,6 +90,13 @@ class Orchestrator(QObject):
         # ~1 s poll latency). Simpler + cleaner: the user can't start a
         # new turn until the current one finishes or the timeouts fire.
         self._pipeline_future = None  # type: ignore[var-annotated]
+        # Gate flag set the instant hotkey-up decides a pipeline will run,
+        # cleared in the pipeline's finally. Closes the race where a press
+        # arriving between `recorder.stop()` and `_pipeline_future = submit(...)`
+        # would see neither recorder-recording nor a busy future, start a
+        # fresh recording, and get immediately clobbered when hotkey-up's
+        # thread then overwrites the pill with "processing".
+        self._pipeline_gate = False
 
         self.recorder = Recorder()
 
@@ -132,6 +139,8 @@ class Orchestrator(QObject):
     # ── Pipeline ─────────────────────────────────────────────────────
 
     def _pipeline_busy(self) -> bool:
+        if self._pipeline_gate:
+            return True
         fut = self._pipeline_future
         return fut is not None and not fut.done()
 
@@ -143,8 +152,12 @@ class Orchestrator(QObject):
             # Previous turn is still processing (STT / LLM / paste).
             # Ignore the hotkey rather than queue another request behind
             # whatever is already in flight — see __init__ for the why.
+            # Do NOT touch the pill: the pipeline is mid-flight emitting
+            # processing/enhancing/typing states, and any flash-error here
+            # both races those emissions (so the "Busy" message never
+            # shows) and forces the pill back to idle after dwell_ms —
+            # which looks exactly like the pipeline was aborted.
             log.info("hotkey down ignored — previous pipeline still running")
-            self._flash_error("Busy, please wait", dwell_ms=900)
             return
         s = config.load()
         silence_dur = float(s.silence_duration_sec) if s.auto_stop_on_silence else 0.0
@@ -173,10 +186,15 @@ class Orchestrator(QObject):
         """Hotkey released — finalise capture + run the pipeline."""
         if not self.recorder.recording:
             return
+        # Raise the gate BEFORE we stop the recorder, so a press arriving
+        # in the tiny window between stop() and submit() is correctly seen
+        # as "busy" by _on_hotkey_down and doesn't start a parallel turn.
+        self._pipeline_gate = True
         pcm = self.recorder.stop()
         dur = estimate_duration(pcm)
         log.info("hotkey up — captured %.2fs (%d bytes)", dur, len(pcm))
         if not pcm:
+            self._pipeline_gate = False
             self._set_pill("idle", "")
             return
 
@@ -185,6 +203,7 @@ class Orchestrator(QObject):
         # VAD
         if s.vad_enabled and not has_speech(pcm):
             log.info("VAD rejected empty recording")
+            self._pipeline_gate = False
             self._flash_error("No speech detected")
             return
 
@@ -193,6 +212,12 @@ class Orchestrator(QObject):
 
     async def _pipeline(self, pcm: bytes, s: AppSettings) -> None:
         """Async half of the dictation pipeline."""
+        try:
+            await self._pipeline_inner(pcm, s)
+        finally:
+            self._pipeline_gate = False
+
+    async def _pipeline_inner(self, pcm: bytes, s: AppSettings) -> None:
         t0 = time.monotonic()
         raw = ""
         # Idle-unload may have stopped Whisper; (re)spawn if needed.
