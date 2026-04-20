@@ -123,10 +123,25 @@ QLabel.stat_pill_ok  {{ color: {OK};  border-color: rgba(86, 224, 194, 80); }}
 QLabel.stat_pill_err {{ color: {ERR}; border-color: rgba(255, 110, 110, 80); }}
 QLabel.toggle_label  {{ font-size: 12px; }}
 
-QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px 0; }}
-QScrollBar::handle:vertical {{ background: #1e2636; border-radius: 4px; min-height: 18px; }}
-QScrollBar::handle:vertical:hover {{ background: #2a3147; }}
-QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+/* Scrollbars — visible on dark backgrounds (matches telecode tray). */
+QScrollBar:vertical {{
+    background: {BG_ELEV}; width: 12px; margin: 2px 0; border: none;
+}}
+QScrollBar::handle:vertical {{
+    background: #3a4563; border-radius: 5px; min-height: 24px;
+}}
+QScrollBar::handle:vertical:hover {{ background: #5b6a92; }}
+QScrollBar:horizontal {{
+    background: {BG_ELEV}; height: 12px; margin: 0 2px; border: none;
+}}
+QScrollBar::handle:horizontal {{
+    background: #3a4563; border-radius: 5px; min-width: 24px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: #5b6a92; }}
+QScrollBar::add-line, QScrollBar::sub-line {{
+    width: 0; height: 0; background: transparent;
+}}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
 QToolTip {{
     background: {BG_CARD}; border: 1px solid {BORDER}; color: {FG};

@@ -44,6 +44,12 @@ def _page() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
+    # Always show both scrollbars. AsNeeded was unreliable — the
+    # QScrollArea's widget-resizable mode stretches content to viewport
+    # horizontally, so h-scroll never appeared even when content had
+    # wide children. AlwaysOn makes their presence obvious and consistent.
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
     content = QWidget()
     content.setObjectName("content")
     layout = QVBoxLayout(content)
