@@ -39,13 +39,32 @@ QMenu::item:selected {{ background: {BG_ROW}; }}
 QMenu::item:disabled {{ color: {FG_MUTE}; }}
 QMenu::separator {{ height: 1px; background: {BORDER}; margin: 4px 6px; }}
 
-QListWidget#sidebar {{
+QListWidget {
+    background: #0d1118;
+    border: 1px solid {BORDER};
+    border-radius: 4px;
+    outline: 0;
+}
+QListWidget::item {
+    padding: 6px 10px;
+    color: {FG};
+}
+QListWidget::item:hover {
+    background: {BG_HOVER};
+}
+QListWidget::item:selected {
+    background: {BG_ROW};
+    color: {ACCENT};
+}
+
+QListWidget#sidebar {
     background: {BG_ELEV};
     border: none;
     border-right: 1px solid {BORDER_SOFT};
+    border-radius: 0;
     outline: 0;
     padding: 10px 6px;
-}}
+}
 QListWidget#sidebar::item {{
     padding: 9px 14px; border-radius: 6px; color: {FG_DIM};
     margin-bottom: 2px; min-height: 22px;
@@ -66,7 +85,17 @@ QPushButton.tb_btn {{
 QPushButton.tb_btn:hover {{ background: {BG_HOVER}; color: {FG}; }}
 QPushButton.tb_close:hover {{ background: #e81123; color: white; }}
 
-QScrollArea {{ background: {BG}; border: none; }}
+QSplitter::handle {
+    background: {BORDER_SOFT};
+}
+QSplitter::handle:horizontal {
+    width: 1px;
+}
+QSplitter::handle:vertical {
+    height: 1px;
+}
+
+QScrollArea { background: {BG}; border: none; }
 QWidget#content {{ background: {BG}; }}
 
 QFrame.card {{ background: {BG_CARD}; border: 1px solid {BORDER}; border-radius: 8px; }}
