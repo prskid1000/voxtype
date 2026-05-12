@@ -214,8 +214,13 @@ takes ~10 s.
    (PySide6, pynput, sounddevice, aiohttp, sherpa-onnx, huggingface_hub)
 3. **GPU runtime** (if `-GpuSupport $true`): swap CPU `onnxruntime` for
    `onnxruntime-gpu` so both STT and TTS land on CUDA when `device='cuda'`
-4. **Scheduled task** `VoxType`: runs `pythonw.exe -m voxtype` at logon
-5. **Seed settings**: `data/settings.json` with AppSettings defaults.
+4. **Pre-download default models**: snapshot_download via huggingface_hub
+   for `csukuangfj/sherpa-onnx-whisper-turbo` and
+   `csukuangfj/kokoro-multi-lang-v1_1`. Idempotent — already-cached files
+   skip. Network failure is non-fatal (engines download lazily on first
+   use).
+5. **Scheduled task** `VoxType`: runs `pythonw.exe -m voxtype` at logon
+6. **Seed settings**: `data/settings.json` with AppSettings defaults.
    Both engines have built-in defaults (`csukuangfj/sherpa-onnx-whisper-turbo`
    for STT, `csukuangfj/kokoro-multi-lang-v1_1` for TTS) so dictation
    works out of the box — settings are only for overrides.

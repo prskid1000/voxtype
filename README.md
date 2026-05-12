@@ -38,10 +38,18 @@ cd "$env:USERPROFILE\.voxtype"
 3. If `-GpuSupport $true` (default): swap CPU `onnxruntime` for
    `onnxruntime-gpu` so `device='cuda'` lands on the GPU for both STT
    and TTS (falls back to CPU automatically if CUDA isn't usable)
-4. Register a single scheduled task `VoxType` that launches
+4. Pre-download the default STT + TTS models into the HuggingFace cache
+   (`~/.cache/huggingface/hub`) so the first dictation isn't blocked on
+   a multi-GB download. Skipped silently if a model is already cached —
+   re-runs cost nothing.
+5. Register a single scheduled task `VoxType` that launches
    `pythonw.exe -m voxtype` at logon (no console window)
-5. Seed `voxtype/data/settings.json` with defaults
-6. Start VoxType immediately
+6. Seed `voxtype/data/settings.json` with defaults
+7. Start VoxType immediately
+
+Re-running `setup.ps1` is idempotent at every phase: venvs reuse
+existing site-packages, the model pre-download skips cached files, the
+scheduled task is recreated cleanly.
 
 Look for the tray icon (bottom-right). Press **Ctrl+Win**, speak,
 release.

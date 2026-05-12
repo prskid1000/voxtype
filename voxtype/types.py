@@ -49,24 +49,27 @@ class AppSettings:
     server_port: int = 6600
 
     # ── STT (in-process via ONNX Runtime) ────────────────────────────
-    # `stt_model_path` points at the encoder `.onnx` file (decoder and
-    # tokens.txt are auto-located next to it). Any sherpa-onnx-compatible
-    # export works.
+    # `stt_model_path` accepts a HF repo ID (auto-downloaded) or a local
+    # path to a sherpa-onnx model directory. Default = Whisper Large V3
+    # Turbo: multilingual (99+ langs), ~6× faster than large-v3.
+    # Clearing the field falls back to the same default — the engine
+    # treats empty as "use built-in default" (see stt_engine.DEFAULT_MODEL).
     stt_enabled: bool = True
     stt_auto_start: bool = True
     stt_idle_unload_sec: int = 300
-    stt_model_path: str = ""
+    stt_model_path: str = "csukuangfj/sherpa-onnx-whisper-turbo"
     stt_device: OnnxDevice = "cpu"
     stt_language: str = "en"
 
     # ── TTS (in-process via ONNX Runtime) ────────────────────────────
-    # Off by default. The model_path points at an ONNX file (paired
-    # `.onnx.json` is auto-located). Voice selection IS the model file —
-    # no separate voice list.
+    # `tts_model_path` accepts a HF repo ID (auto-downloaded) or a local
+    # path. Default = Kokoro multi-lang v1.1: 103 voices in one model,
+    # English + Chinese, 82M params. Empty falls back to the built-in
+    # default (see tts_engine.DEFAULT_MODEL).
     tts_enabled: bool = False
     tts_auto_start: bool = False
     tts_idle_unload_sec: int = 600
-    tts_model_path: str = ""
+    tts_model_path: str = "csukuangfj/kokoro-multi-lang-v1_1"
     tts_device: OnnxDevice = "cpu"
     tts_speaker: int = 0               # speaker index for multi-speaker models
     tts_length_scale: float = 1.0      # >1 = slower; OpenAI speed is its inverse

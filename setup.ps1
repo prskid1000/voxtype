@@ -137,6 +137,55 @@ if ($GpuSupport) {
     }
 }
 
+# ─── Pre-download default models (idempotent) ────────────────────────
+#
+# huggingface_hub.snapshot_download() uses the HF cache (default
+# ~/.cache/huggingface/hub) and skips files that already exist — so
+# this step is safe to re-run, only the missing pieces are fetched.
+#
+# Pulled now so the first dictation isn't blocked on a multi-GB
+# download. Errors are non-fatal: if the user has no network at
+# install time, the engines just download lazily on first use.
+
+Step "Pre-downloading default models"
+
+$stt_default = "csukuangfj/sherpa-onnx-whisper-turbo"
+$tts_default = "csukuangfj/kokoro-multi-lang-v1_1"
+
+Write-Host "    Fetching $stt_default (~1.6 GB) — skipped if already cached..." -ForegroundColor DarkGray
+$rc_stt = & $voxPython -c @"
+import sys
+try:
+    from huggingface_hub import snapshot_download
+    p = snapshot_download(repo_id='$stt_default')
+    print('STT cached at', p)
+except Exception as e:
+    print('STT download skipped:', e, file=sys.stderr)
+    sys.exit(1)
+"@ 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Ok "STT default cached ($stt_default)"
+} else {
+    Warn "STT model pre-download failed (will download lazily on first use): $rc_stt"
+}
+
+Write-Host "    Fetching $tts_default (~395 MB) — skipped if already cached..." -ForegroundColor DarkGray
+$rc_tts = & $voxPython -c @"
+import sys
+try:
+    from huggingface_hub import snapshot_download
+    p = snapshot_download(repo_id='$tts_default')
+    print('TTS cached at', p)
+except Exception as e:
+    print('TTS download skipped:', e, file=sys.stderr)
+    sys.exit(1)
+"@ 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Ok "TTS default cached ($tts_default)"
+} else {
+    Warn "TTS model pre-download failed (will download lazily on first use): $rc_tts"
+}
+
 # ─── Scheduled task ──────────────────────────────────────────────────
 
 Step "Registering scheduled task: VoxType"
