@@ -205,16 +205,14 @@ Single venv. Idempotent — re-running on a fully-installed machine
 takes ~10 s.
 
 1. **Prereqs**: Python 3.10+, git, ffmpeg (warn-only), GPU detection
-2. **Migration**: remove legacy `stt-venv/`, `tts-venv/`,
-   `Kokoro-FastAPI/` from older installs
-3. **Single venv**: `voxtype-venv/` + `pip install -r voxtype/requirements.txt`
+2. **Single venv**: `voxtype-venv/` + `pip install -r voxtype/requirements.txt`
    (PySide6, pynput, sounddevice, aiohttp, sherpa-onnx, piper-tts,
    huggingface_hub)
-4. **GPU runtime** (if `-GpuSupport $true`): swap CPU `onnxruntime` for
+3. **GPU runtime** (if `-GpuSupport $true`): swap CPU `onnxruntime` for
    `onnxruntime-gpu` so both STT and TTS land on CUDA when `device='cuda'`
-5. **Scheduled task** `VoxType`: runs `pythonw.exe -m voxtype` at logon
-6. **Seed settings**: empty `data/settings.json` with the AppSettings
-   defaults (user picks STT/TTS models from the settings window)
+4. **Scheduled task** `VoxType`: runs `pythonw.exe -m voxtype` at logon
+5. **Seed settings**: `data/settings.json` with AppSettings defaults
+   (user picks STT/TTS models from the settings window)
 
 Parameters: `-GpuSupport`, `-SkipTTS`, `-InstallDir`.
 

@@ -103,17 +103,6 @@ Step "Install directory: $InstallDir"
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Ok "Ready"
 
-# ─── Cleanup legacy sidecar venvs (idempotent) ───────────────────────
-
-foreach ($legacy in @("stt-venv", "tts-venv", "Kokoro-FastAPI")) {
-    $p = Join-Path $InstallDir $legacy
-    if (Test-Path $p) {
-        Write-Host "    Removing legacy $legacy..." -ForegroundColor DarkGray
-        Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue
-        Ok "Removed legacy $legacy"
-    }
-}
-
 # ─── VoxType venv (single venv, all in-process via ONNX Runtime) ─────
 
 Step "Installing VoxType (single venv — UI + STT + TTS all in-process)"

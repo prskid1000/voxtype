@@ -30,18 +30,16 @@ cd "$env:USERPROFILE\.voxtype"
 `setup.ps1` will:
 
 1. Verify **Python 3.10+**, **git**, **ffmpeg** (optional), GPU support
-2. Remove any legacy sidecar venvs (`stt-venv/`, `tts-venv/`,
-   `Kokoro-FastAPI/`) from a previous install — idempotent migration
-3. Create `voxtype-venv/` and `pip install -r voxtype/requirements.txt`
+2. Create `voxtype-venv/` and `pip install -r voxtype/requirements.txt`
    (PySide6, pynput, sounddevice, aiohttp, **sherpa-onnx**, **piper-tts**,
    **huggingface_hub**, …) into one venv
-4. If `-GpuSupport $true` (default): swap CPU `onnxruntime` for
+3. If `-GpuSupport $true` (default): swap CPU `onnxruntime` for
    `onnxruntime-gpu` so `device='cuda'` lands on the GPU for both STT
    and TTS (falls back to CPU automatically if CUDA isn't usable)
-5. Register a single scheduled task `VoxType` that launches
+4. Register a single scheduled task `VoxType` that launches
    `pythonw.exe -m voxtype` at logon (no console window)
-6. Seed `voxtype/data/settings.json` with defaults
-7. Start VoxType immediately
+5. Seed `voxtype/data/settings.json` with defaults
+6. Start VoxType immediately
 
 Look for the tray icon (bottom-right). Press **Ctrl+Win**, speak,
 release.
