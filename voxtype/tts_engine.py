@@ -82,6 +82,10 @@ class TTSEngine:
         self._device = "cpu"
         self._speaker = DEFAULT_VOICE
         self._length_scale = 1.0
+        self._lang_code = "a"
+        self._warmup = True
+        self._torch_compile = False
+        self._stream_default = False
 
     # ── Listener wiring ──────────────────────────────────────────────
 
@@ -113,18 +117,35 @@ class TTSEngine:
         return (self._speaker or "").strip() or DEFAULT_VOICE
 
     def _key(self) -> tuple:
-        return (self._effective_model(), self._device)
+        # Only fields that require a pipeline rebuild belong here.
+        # speaker / length_scale / stream_default are per-call.
+        return (
+            self._effective_model(), self._device,
+            self._lang_code, bool(self._torch_compile),
+        )
 
     async def configure(self, s) -> None:
         self._model_path = str(getattr(s, "tts_model_path", "") or "")
         self._device = str(getattr(s, "tts_device", "cpu"))
         self._speaker = str(getattr(s, "tts_speaker", DEFAULT_VOICE) or DEFAULT_VOICE)
         self._length_scale = float(getattr(s, "tts_length_scale", 1.0) or 1.0)
+        self._lang_code = str(getattr(s, "tts_lang_code", "a") or "a")
+        self._warmup = bool(getattr(s, "tts_warmup", True))
+        self._torch_compile = bool(getattr(s, "tts_torch_compile", False))
+        self._stream_default = bool(getattr(s, "tts_stream", False))
         self._idle_unload_sec = int(getattr(s, "tts_idle_unload_sec", 0))
 
         if self._loaded_key is not None and self._loaded_key != self._key():
             log.info("tts config changed — unloading current model")
             await self.unload()
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
+    def stream_default(self) -> bool:
+        return self._stream_default
 
     # ── Load / unload ────────────────────────────────────────────────
 
@@ -181,13 +202,32 @@ class TTSEngine:
             self._torch_device = "cpu"
 
         # KPipeline picks the language family from the voice prefix at
-        # synthesise time, so we don't need lang_code locked at init.
-        # We pass `lang_code="a"` (American English) as a default that
-        # works without phonemizer warnings; the per-call voice prefix
-        # overrides language selection internally.
+        # synthesise time. lang_code is the fallback used when the voice
+        # prefix doesn't match a known family — default "a" (American
+        # English) keeps misaki quiet for af_*/am_* voices.
         self._pipeline = KPipeline(
-            lang_code="a", repo_id=model_repo, device=self._torch_device,
+            lang_code=self._lang_code or "a",
+            repo_id=model_repo,
+            device=self._torch_device,
         )
+
+        if self._torch_compile:
+            try:
+                inner = getattr(self._pipeline, "model", None)
+                if inner is not None:
+                    log.info("tts torch.compile() — first synth will pause for JIT")
+                    self._pipeline.model = torch.compile(inner, mode="reduce-overhead")
+            except Exception as exc:
+                log.warning("tts: torch.compile failed (%s) — running uncompiled", exc)
+
+        if self._warmup:
+            try:
+                _ = self._do_synthesize(
+                    "Voxtype ready.", self._effective_voice(), self._length_scale,
+                )
+                log.info("tts warmup ok")
+            except Exception as exc:
+                log.warning("tts: warmup failed (%s) — first real call may be slow", exc)
 
     async def unload(self) -> None:
         async with self._model_lock:
@@ -232,6 +272,53 @@ class TTSEngine:
         return await loop.run_in_executor(
             self._exec, self._do_synthesize, text, v, spd,
         )
+
+    async def synthesize_pcm_chunks(
+        self, text: str,
+        voice: str | None = None,
+        speed: float | None = None,
+    ):
+        """Async generator yielding raw int16 PCM chunks (mono, sample_rate Hz).
+
+        Each yielded chunk is one Kokoro sentence's worth of audio. The
+        HTTP layer wraps this into a streaming WAV response so external
+        clients hear the first sentence in ~200 ms instead of waiting
+        for the whole utterance.
+        """
+        await self.ensure_loaded()
+        self._last_used = time.monotonic()
+        v = (voice or "").strip() if isinstance(voice, str) else ""
+        if not v:
+            v = self._effective_voice()
+        spd = float(speed) if (speed and speed > 0) else float(self._length_scale or 1.0)
+
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=8)
+
+        def _producer() -> None:
+            import numpy as np
+            import torch
+            try:
+                for _, _, audio in self._pipeline(text, voice=v, speed=spd):
+                    if audio is None:
+                        continue
+                    if isinstance(audio, torch.Tensor):
+                        arr = audio.detach().cpu().to(torch.float32).numpy()
+                    else:
+                        arr = np.asarray(audio, dtype=np.float32)
+                    arr = arr.reshape(-1)
+                    np.clip(arr, -1.0, 1.0, out=arr)
+                    pcm = (arr * 32767.0).astype(np.int16).tobytes()
+                    asyncio.run_coroutine_threadsafe(queue.put(pcm), loop).result()
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
+
+        loop.run_in_executor(self._exec, _producer)
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                return
+            yield chunk
 
     def _do_synthesize(self, text: str, voice: str, speed: float) -> bytes:
         """Sync — runs in the executor. Returns WAV bytes.

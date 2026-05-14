@@ -586,7 +586,7 @@ def _build_services(window) -> QWidget:
     layout.addWidget(srv_card)
 
     # ── STT card ───────────────────────────────────────────────────
-    s_card, s_body = _card("STT", "speech-to-text · in-process ONNX Runtime")
+    s_card, s_body = _card("STT", "speech-to-text · transformers + torch (Whisper)")
     s_body.addWidget(_row(_label("Enabled"),
         _checkbox("stt_enabled", "Run STT")))
     s_body.addWidget(_row(_label("Auto-Start On Boot",
@@ -609,6 +609,37 @@ def _build_services(window) -> QWidget:
     s_body.addWidget(_row(_label("Language",
         "ISO 639-1 code (en, de, ja, etc.). Leave 'en' for English."),
         _line_edit("stt_language")))
+    s_body.addWidget(_row(_label("Task",
+        "transcribe = output source language. translate = output English "
+        "regardless of source (Whisper's built-in translation mode)."),
+        _combo("stt_task", [("transcribe", "Transcribe"), ("translate", "Translate → EN")])))
+    s_body.addWidget(_row(_label("Precision",
+        "Inference dtype. auto = fp16 on GPU, fp32 on CPU. bf16 needs "
+        "Ampere+ (RTX 30xx / A100+) — same speed as fp16, wider numeric "
+        "range. fp32 is the slowest but most accurate."),
+        _combo("stt_dtype", [
+            ("auto", "Auto"), ("fp16", "fp16 (GPU fast)"),
+            ("bf16", "bf16 (Ampere+)"), ("fp32", "fp32 (accurate)"),
+        ])))
+    s_body.addWidget(_row(_label("Beams",
+        "Beam-search width. 1 = greedy decoding, fastest. Higher = lower "
+        "WER but ~N× slower. Stick to 1 for live dictation."),
+        _spin("stt_num_beams", 1, 10)))
+    s_body.addWidget(_row(_label("Initial Prompt",
+        "Free text fed to the decoder to bias decoding. Useful for "
+        "jargon / acronyms / proper names (e.g. \"VoxType, telecode, "
+        "RouteMagic\"). Empty = no bias."),
+        _line_edit("stt_initial_prompt")))
+    s_body.addWidget(_row(_label("Warm Up On Load",
+        "Run a dummy 1-second inference right after the model loads so "
+        "the FIRST real hotkey press isn't slow (CUDA kernel autotune, "
+        "lazy weight materialisation)."),
+        _checkbox("stt_warmup", "Enabled")))
+    s_body.addWidget(_row(_label("torch.compile",
+        "JIT-compile the model for ~20-40% steady-state speedup. Adds "
+        "~30 s to the FIRST inference (one-time compile). Leave off "
+        "unless you transcribe constantly."),
+        _checkbox("stt_torch_compile", "Enabled")))
     s_body.addWidget(_lifecycle_row(
         "Load", "Unload", "Reload",
         on_load=lambda: window.start_service("stt"),
@@ -619,7 +650,7 @@ def _build_services(window) -> QWidget:
     layout.addWidget(s_card)
 
     # ── TTS card ───────────────────────────────────────────────────
-    t_card, t_body = _card("TTS", "text-to-speech · in-process ONNX Runtime")
+    t_card, t_body = _card("TTS", "text-to-speech · kokoro + torch (Kokoro-82M)")
     t_body.addWidget(_row(_label("Enabled"),
         _checkbox("tts_enabled", "Run TTS")))
     t_body.addWidget(_row(_label("Auto-Start On Boot"),
@@ -648,6 +679,29 @@ def _build_services(window) -> QWidget:
     t_body.addWidget(_row(_label("Speed",
         "Synthesis rate. 1.0 = normal, >1 = faster, <1 = slower."),
         _slider_float("tts_length_scale", 0.5, 2.0, 0.05, suffix="x")))
+    t_body.addWidget(_row(_label("Fallback Lang",
+        "Phonemizer fallback language for text that doesn't match the "
+        "voice prefix. a=Am-En, b=Br-En, e=es, f=fr, h=hi, i=it, j=ja, "
+        "p=pt-br, z=zh. Voice prefix still wins per call."),
+        _combo("tts_lang_code", [
+            ("a", "a — American English"), ("b", "b — British English"),
+            ("e", "e — Spanish"), ("f", "f — French"),
+            ("h", "h — Hindi"), ("i", "i — Italian"),
+            ("j", "j — Japanese"), ("p", "p — Portuguese (BR)"),
+            ("z", "z — Mandarin"),
+        ])))
+    t_body.addWidget(_row(_label("Stream Audio",
+        "Reply with chunked WAV — first audio plays in ~200 ms instead "
+        "of waiting for the whole utterance. Big TTFB win for long text."),
+        _checkbox("tts_stream", "Enabled")))
+    t_body.addWidget(_row(_label("Warm Up On Load",
+        "Run a dummy synth right after the pipeline loads so the FIRST "
+        "real /v1/audio/speech call isn't slow."),
+        _checkbox("tts_warmup", "Enabled")))
+    t_body.addWidget(_row(_label("torch.compile",
+        "JIT-compile the Kokoro model. ~15% steady-state speedup with a "
+        "shorter first-call penalty than Whisper (Kokoro is only 82M)."),
+        _checkbox("tts_torch_compile", "Enabled")))
     t_body.addWidget(_lifecycle_row(
         "Load", "Unload", "Reload",
         on_load=lambda: window.start_service("tts"),

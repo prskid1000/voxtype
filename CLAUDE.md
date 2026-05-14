@@ -146,10 +146,16 @@ Every UI toggle calls `config.patch("path.to.key", value)` which:
 2. Atomically writes `data/settings.json` (tmp + `os.replace`)
 3. Any subsequent `config.load()` sees the new value
 
-**Effect on next inference call**: stt_model_path, stt_device,
-stt_language, tts_model_path, tts_device, tts_speaker. The engine's
+**Forces a model rebuild** (engine `_key()` includes these):
+stt_model_path, stt_device, stt_dtype, stt_torch_compile,
+tts_model_path, tts_device, tts_lang_code, tts_torch_compile.
 `configure()` notices the key change and unloads so the next request
 rebuilds.
+
+**Applied per-call, no rebuild**: stt_language, stt_task, stt_num_beams,
+stt_initial_prompt, tts_speaker, tts_length_scale, tts_stream.
+
+**Applied on next load only**: stt_warmup, tts_warmup.
 
 **Requires server restart**: server_port. Use the "Restart" button in
 the Server card.
@@ -170,6 +176,12 @@ class AppSettings:
     stt_model_path: str = "openai/whisper-base"
     stt_device: TorchDevice = "cpu"
     stt_language: str = "en"
+    stt_task: STTTask = "transcribe"          # or "translate" → EN
+    stt_dtype: TorchDtype = "auto"            # auto / fp32 / fp16 / bf16
+    stt_num_beams: int = 1                    # 1 = greedy / fastest
+    stt_initial_prompt: str = ""              # bias decoder with jargon
+    stt_warmup: bool = True                   # dummy infer after load
+    stt_torch_compile: bool = False           # +20-40% steady-state
 
     # TTS (kokoro + torch)
     tts_enabled: bool = False
@@ -179,6 +191,10 @@ class AppSettings:
     tts_device: TorchDevice = "cpu"
     tts_speaker: str = "af_heart"
     tts_length_scale: float = 1.0
+    tts_lang_code: str = "a"                  # fallback phonemizer lang
+    tts_warmup: bool = True
+    tts_torch_compile: bool = False           # ~15% steady-state win
+    tts_stream: bool = False                  # chunked WAV reply
 ```
 
 ## Tray + Settings UI

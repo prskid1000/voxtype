@@ -13,6 +13,11 @@ PillState = Literal["idle", "recording", "processing", "enhancing", "typing", "e
 HotkeyMode = Literal["hold", "toggle"]
 # torch device preference. Used by both STT and TTS engines.
 TorchDevice = Literal["cpu", "cuda"]
+# Inference precision. `auto` = fp16 on CUDA, fp32 on CPU. `bf16` needs
+# Ampere+ (RTX 30xx / A100+) — same speed as fp16, wider numeric range.
+TorchDtype = Literal["auto", "fp32", "fp16", "bf16"]
+# Whisper task. `translate` outputs English regardless of source language.
+STTTask = Literal["transcribe", "translate"]
 
 
 @dataclass
@@ -60,6 +65,21 @@ class AppSettings:
     stt_model_path: str = "openai/whisper-base"
     stt_device: TorchDevice = "cpu"
     stt_language: str = "en"
+    # Whisper task. `translate` → English; `transcribe` → source language.
+    stt_task: STTTask = "transcribe"
+    # Override torch dtype. `auto` picks fp16/CUDA, fp32/CPU.
+    stt_dtype: TorchDtype = "auto"
+    # Beam-search width. 1 = greedy (fastest). Higher = slower but lower WER.
+    stt_num_beams: int = 1
+    # Domain-bias prompt fed to the decoder (jargon, names, codes).
+    stt_initial_prompt: str = ""
+    # Run a dummy 1-sec inference right after load so the FIRST real
+    # hotkey press isn't slow (CUDA kernel autotune, etc.).
+    stt_warmup: bool = True
+    # torch.compile(model) after load. ~20-40% steady-state speedup, but
+    # adds ~30 s to the first inference (one-time JIT) and can break with
+    # exotic models. Safe to leave off unless you transcribe constantly.
+    stt_torch_compile: bool = False
 
     # ── TTS (in-process via kokoro PyPI package + torch) ────────────
     # `tts_model_path` accepts a HF repo ID. Default = `hexgrad/Kokoro-82M`:
@@ -75,6 +95,18 @@ class AppSettings:
     tts_device: TorchDevice = "cpu"
     tts_speaker: str = "af_heart"
     tts_length_scale: float = 1.0      # Kokoro `speed` arg (1.0 = normal)
+    # Phonemizer fallback language for non-prefixed text. Voice prefix
+    # still overrides per call. a=Am-En, b=Br-En, e=es, f=fr, h=hi, i=it,
+    # j=ja, p=pt-br, z=zh.
+    tts_lang_code: str = "a"
+    # First-call warmup — same idea as STT.
+    tts_warmup: bool = True
+    # torch.compile(model) — Kokoro is small so the win is smaller (~15%)
+    # but the first-synth penalty is also lower.
+    tts_torch_compile: bool = False
+    # Stream WAV chunks back as Kokoro yields per-sentence audio.
+    # Drops time-to-first-audio from ~full utterance to ~200 ms.
+    tts_stream: bool = False
 
     # ── LLM enhancement (via telecode proxy) ─────────────────────────
     enhance_enabled: bool = True

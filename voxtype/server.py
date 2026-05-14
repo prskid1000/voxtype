@@ -159,6 +159,25 @@ async def handle_transcribe(request: web.Request) -> web.Response:
     return web.json_response({"text": text})
 
 
+def _wav_header(sample_rate: int, total_samples: int = 0) -> bytes:
+    """Minimal RIFF/WAVE header for 16-bit mono PCM.
+    `total_samples=0` is the streaming sentinel — the data and RIFF
+    sizes are written as 0xFFFFFFFF so most players accept the stream
+    even though length is unknown ahead of time."""
+    n_ch = 1
+    bps = 16
+    byte_rate = sample_rate * n_ch * (bps // 8)
+    block_align = n_ch * (bps // 8)
+    data_bytes = total_samples * n_ch * (bps // 8)
+    riff_size = 36 + data_bytes if total_samples else 0xFFFFFFFF
+    data_size = data_bytes if total_samples else 0xFFFFFFFF
+    return (
+        b"RIFF" + struct.pack("<I", riff_size) + b"WAVE"
+        + b"fmt " + struct.pack("<IHHIIHH", 16, 1, n_ch, sample_rate, byte_rate, block_align, bps)
+        + b"data" + struct.pack("<I", data_size)
+    )
+
+
 async def handle_speech(request: web.Request) -> web.Response:
     """POST /v1/audio/speech — OpenAI-compatible TTS.
 
@@ -171,6 +190,8 @@ async def handle_speech(request: web.Request) -> web.Response:
                        in VoxType settings (`tts_speaker`).
       speed:           float, default 1.0 (>1 = faster)
       response_format: "wav" (default; we serve WAV natively)
+      stream:          bool. If true (or settings.tts_stream is true),
+                       reply with chunked WAV — first audio in ~200 ms.
     """
     try:
         body = await request.json()
@@ -184,8 +205,32 @@ async def handle_speech(request: web.Request) -> web.Response:
         speed = float(speed_val) if speed_val is not None else None
     except (TypeError, ValueError):
         speed = None
+
+    engine = tts_engine.get_engine()
+    want_stream = bool(body.get("stream", engine.stream_default))
+
+    if want_stream:
+        try:
+            await engine.ensure_loaded()
+        except Exception as exc:
+            log.error("speech: load failed: %s", exc)
+            return web.json_response({"error": str(exc)}, status=500)
+        resp = web.StreamResponse(
+            status=200,
+            headers={"Content-Type": "audio/wav", "Cache-Control": "no-cache"},
+        )
+        await resp.prepare(request)
+        await resp.write(_wav_header(engine.sample_rate, total_samples=0))
+        try:
+            async for pcm in engine.synthesize_pcm_chunks(text, speed=speed):
+                await resp.write(pcm)
+        except Exception as exc:
+            log.error("speech stream: engine failed: %s", exc)
+        await resp.write_eof()
+        return resp
+
     try:
-        wav_bytes = await tts_engine.get_engine().synthesize(text, speed=speed)
+        wav_bytes = await engine.synthesize(text, speed=speed)
     except Exception as exc:
         log.error("speech: engine failed: %s", exc)
         return web.json_response({"error": str(exc)}, status=500)

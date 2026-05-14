@@ -67,6 +67,12 @@ class STTEngine:
         self._model_path = ""
         self._device = "cpu"
         self._language = "en"
+        self._task = "transcribe"
+        self._dtype_pref = "auto"
+        self._num_beams = 1
+        self._initial_prompt = ""
+        self._warmup = True
+        self._torch_compile = False
 
     # ── Listener wiring ──────────────────────────────────────────────
 
@@ -95,12 +101,25 @@ class STTEngine:
         return self._model_path or DEFAULT_MODEL
 
     def _key(self) -> tuple:
-        return (self._effective_model(), self._device)
+        # Only fields that require a model rebuild belong here. dtype,
+        # torch_compile, warmup → model state. task / num_beams /
+        # initial_prompt are per-call generate() args, so changing them
+        # does NOT force an unload.
+        return (
+            self._effective_model(), self._device,
+            self._dtype_pref, bool(self._torch_compile),
+        )
 
     async def configure(self, s) -> None:
         self._model_path = str(getattr(s, "stt_model_path", "") or "")
         self._device = str(getattr(s, "stt_device", "cpu"))
         self._language = str(getattr(s, "stt_language", "en"))
+        self._task = str(getattr(s, "stt_task", "transcribe") or "transcribe")
+        self._dtype_pref = str(getattr(s, "stt_dtype", "auto") or "auto")
+        self._num_beams = int(getattr(s, "stt_num_beams", 1) or 1)
+        self._initial_prompt = str(getattr(s, "stt_initial_prompt", "") or "")
+        self._warmup = bool(getattr(s, "stt_warmup", True))
+        self._torch_compile = bool(getattr(s, "stt_torch_compile", False))
         self._idle_unload_sec = int(getattr(s, "stt_idle_unload_sec", 0))
 
         if self._loaded_key is not None and self._loaded_key != self._key():
@@ -153,18 +172,29 @@ class STTEngine:
 
         Resolves the torch device with graceful CPU fallback:
         device='cuda' but torch.cuda.is_available() == False → CPU.
-        On GPU we use fp16 for ~2× speedup at negligible quality cost.
+        Dtype defaults to fp16 on GPU / fp32 on CPU; overridable via
+        stt_dtype (fp32/fp16/bf16). bf16 needs Ampere+.
         """
         import torch
         from transformers import WhisperForConditionalGeneration, AutoProcessor
 
-        if self._device == "cuda" and torch.cuda.is_available():
-            self._torch_device = "cuda"
-            self._torch_dtype = torch.float16
+        on_cuda = self._device == "cuda" and torch.cuda.is_available()
+        if self._device == "cuda" and not on_cuda:
+            log.warning("stt: device=cuda requested but torch.cuda.is_available()=False — using CPU")
+        self._torch_device = "cuda" if on_cuda else "cpu"
+
+        pref = (self._dtype_pref or "auto").lower()
+        if pref == "auto":
+            self._torch_dtype = torch.float16 if on_cuda else torch.float32
+        elif pref == "fp16":
+            if not on_cuda:
+                log.warning("stt: fp16 requested on CPU — falling back to fp32")
+                self._torch_dtype = torch.float32
+            else:
+                self._torch_dtype = torch.float16
+        elif pref == "bf16":
+            self._torch_dtype = torch.bfloat16
         else:
-            if self._device == "cuda":
-                log.warning("stt: device=cuda requested but torch.cuda.is_available()=False — using CPU")
-            self._torch_device = "cpu"
             self._torch_dtype = torch.float32
 
         self._processor = AutoProcessor.from_pretrained(model_id)
@@ -172,6 +202,22 @@ class STTEngine:
             model_id, torch_dtype=self._torch_dtype,
         ).to(self._torch_device)
         self._model.eval()
+
+        if self._torch_compile:
+            try:
+                log.info("stt torch.compile() — first call will pause for JIT")
+                self._model = torch.compile(self._model, mode="reduce-overhead")
+            except Exception as exc:
+                log.warning("stt: torch.compile failed (%s) — running uncompiled", exc)
+
+        if self._warmup:
+            try:
+                import numpy as np
+                dummy = np.zeros(16000, dtype=np.int16).tobytes()
+                self._do_transcribe(dummy, self._language or "en")
+                log.info("stt warmup ok")
+            except Exception as exc:
+                log.warning("stt: warmup failed (%s) — first real call may be slow", exc)
 
     async def unload(self) -> None:
         async with self._model_lock:
@@ -217,13 +263,24 @@ class STTEngine:
         input_features = inputs.input_features.to(
             self._torch_device, dtype=self._torch_dtype,
         )
+
+        gen_kwargs: dict = {
+            "language": language,
+            "task": self._task or "transcribe",
+            "max_new_tokens": 440,
+            "num_beams": max(1, int(self._num_beams or 1)),
+        }
+        if self._initial_prompt:
+            try:
+                prompt_ids = self._processor.get_prompt_ids(
+                    self._initial_prompt, return_tensors="pt",
+                ).to(self._torch_device)
+                gen_kwargs["prompt_ids"] = prompt_ids
+            except Exception as exc:
+                log.debug("stt: prompt_ids unsupported (%s) — skipping", exc)
+
         with torch.no_grad():
-            generated = self._model.generate(
-                input_features,
-                language=language,
-                task="transcribe",
-                max_new_tokens=440,
-            )
+            generated = self._model.generate(input_features, **gen_kwargs)
         text = self._processor.batch_decode(generated, skip_special_tokens=True)[0]
         return (text or "").strip()
 
