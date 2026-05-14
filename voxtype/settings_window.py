@@ -357,33 +357,98 @@ def _line_edit_static(text: str) -> QLineEdit:
     return le
 
 
+def _detect_family(meta: dict, repo_id: str) -> str:
+    """Return one of {'whisper', 'kokoro', ''} based on HF model metadata.
+    Uses pipeline_tag + tags + the repo id itself. We're permissive — a
+    match on any single signal is enough."""
+    rid = (repo_id or "").lower()
+    tags = [str(t).lower() for t in (meta.get("tags") or [])]
+    pipeline = str(meta.get("pipeline_tag") or "").lower()
+    cfg = meta.get("config") or {}
+    model_type = str(cfg.get("model_type") or "").lower()
+
+    if model_type == "whisper" or "whisper" in rid or "whisper" in tags:
+        return "whisper"
+    if "kokoro" in rid or "kokoro" in tags:
+        return "kokoro"
+    # Hint from pipeline tag alone is too loose (e.g. wav2vec2 is also
+    # automatic-speech-recognition) — keep empty.
+    _ = pipeline
+    return ""
+
+
+def _local_family(path) -> str:
+    """Peek at a local model directory's config.json to detect family.
+    Used when the entered path is a real file/dir on disk."""
+    from pathlib import Path
+    import json
+    p = Path(path)
+    if not p.exists():
+        return ""
+    cfg = p / "config.json" if p.is_dir() else p.parent / "config.json"
+    try:
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+        mt = str(data.get("model_type") or "").lower()
+        if mt == "whisper":
+            return "whisper"
+    except Exception:
+        pass
+    # Kokoro local checkouts have a `kokoro` substring in path or
+    # a `voices/` directory next to the .pth file.
+    name = str(p).lower()
+    if "kokoro" in name:
+        return "kokoro"
+    if p.is_dir() and (p / "voices").is_dir():
+        return "kokoro"
+    return ""
+
+
 def _hf_check_button(line_edit: QLineEdit, status_lbl: QLabel,
-                      default_model: str = "") -> QPushButton:
+                      default_model: str = "",
+                      family: str = "") -> QPushButton:
     """`Check` button that pings huggingface.co/api/models/<id> or, if
     the entered value looks like a local path, just checks existence.
-    Empty field → checks the built-in default. Mirrors the DocGraph
-    reranker pattern in telecode."""
+    Empty field → checks the built-in default.
+
+    If `family` is set ('whisper' / 'kokoro'), we also verify the model
+    belongs to that family. A mismatch turns the pill amber with the
+    detected family name in a tooltip — the engine would fail to load
+    a non-matching model, so this catches it before the user hits Load.
+    """
     from voxtype.qt_theme import OK, ERR, WARN
     btn = QPushButton("Check")
     btn.setProperty("class", "ghost")
     btn.setFixedWidth(58)
+
+    def _set(text: str, color: str, tip: str = "") -> None:
+        status_lbl.setText(text)
+        status_lbl.setStyleSheet(f"color: {color}; font-size: 11px;")
+        status_lbl.setToolTip(tip)
 
     async def _do_check() -> None:
         from pathlib import Path
         import aiohttp
         text = (line_edit.text().strip() or default_model).strip()
         if not text:
-            status_lbl.setText("(empty)")
-            status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+            _set("(empty)", FG_MUTE)
             return
         # Local path? skip HF and just stat the file.
         candidate = Path(text).expanduser()
         if candidate.exists():
-            status_lbl.setText("✓ local")
-            status_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
+            if not family:
+                _set("✓ local", OK)
+                return
+            detected = _local_family(candidate)
+            if detected == family:
+                _set(f"✓ local · {family}", OK)
+            elif detected:
+                _set(f"⚠ {detected} ≠ {family}", WARN,
+                     f"Local model looks like {detected!r}; this engine needs {family!r}.")
+            else:
+                _set("✓ local (?)", WARN,
+                     f"Could not detect family from local files. Engine expects {family!r}.")
             return
-        status_lbl.setText("checking…")
-        status_lbl.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
+        _set("checking…", FG_MUTE)
         # HF API uses GET — HEAD returns 401 even for public repos.
         url = f"https://huggingface.co/api/models/{text.strip('/')}"
         headers = {"User-Agent": "voxtype/1.0", "Accept": "application/json"}
@@ -392,20 +457,34 @@ def _hf_check_button(line_edit: QLineEdit, status_lbl: QLabel,
                 async with sess.get(url, timeout=aiohttp.ClientTimeout(total=8),
                                      allow_redirects=True) as resp:
                     if resp.status == 200:
-                        status_lbl.setText("✓ found")
-                        status_lbl.setStyleSheet(f"color: {OK}; font-size: 11px;")
+                        if not family:
+                            _set("✓ found", OK)
+                            return
+                        try:
+                            meta = await resp.json(content_type=None)
+                        except Exception:
+                            meta = {}
+                        detected = _detect_family(meta or {}, text)
+                        if detected == family:
+                            _set(f"✓ {family}", OK,
+                                 f"Confirmed {family} family on HF.")
+                        elif detected:
+                            _set(f"⚠ {detected} ≠ {family}", WARN,
+                                 f"HF reports family={detected!r}; engine needs {family!r}. "
+                                 f"Loading will fail.")
+                        else:
+                            pt = (meta or {}).get("pipeline_tag") or "unknown"
+                            _set("⚠ wrong type", WARN,
+                                 f"Repo exists but isn't a {family} model "
+                                 f"(pipeline_tag={pt!r}). Engine will fail to load.")
                     elif resp.status in (401, 403):
-                        status_lbl.setText("🔒 private")
-                        status_lbl.setStyleSheet(f"color: {WARN}; font-size: 11px;")
+                        _set("🔒 private", WARN)
                     elif resp.status == 404:
-                        status_lbl.setText("✗ not found")
-                        status_lbl.setStyleSheet(f"color: {ERR}; font-size: 11px;")
+                        _set("✗ not found", ERR)
                     else:
-                        status_lbl.setText(f"? {resp.status}")
-                        status_lbl.setStyleSheet(f"color: {WARN}; font-size: 11px;")
+                        _set(f"? {resp.status}", WARN)
         except Exception:
-            status_lbl.setText("error")
-            status_lbl.setStyleSheet(f"color: {ERR}; font-size: 11px;")
+            _set("error", ERR)
 
     def _on_click() -> None:
         try:
@@ -421,16 +500,19 @@ def _hf_check_button(line_edit: QLineEdit, status_lbl: QLabel,
     return btn
 
 
-def _model_row(path_field: str, default_model: str = "") -> QWidget:
+def _model_row(path_field: str, default_model: str = "",
+                family: str = "") -> QWidget:
     """Model path row: text field (HF repo OR local path) + Browse + Check + status pill.
 
     Same pattern as docgraph's reranker model row:
       - Empty field → engine uses `default_model` automatically.
       - Placeholder text shows the default so users know what they'll get.
-      - Free text accepts an HF repo ID (e.g.
-        `csukuangfj/sherpa-onnx-whisper-small.en`) or a local path.
-      - Browse picks a local `.onnx` file.
-      - Check verifies the value (local stat first, then HF API).
+      - Free text accepts an HF repo ID or a local path.
+      - Browse picks a local model file.
+      - Check verifies the value (local stat first, then HF API). If
+        `family` is set ('whisper' / 'kokoro'), Check also validates that
+        the model belongs to that family — catches incompatible repos
+        before the engine's Load button fails.
     """
     from PySide6.QtWidgets import QFileDialog
     w = QWidget()
@@ -459,7 +541,7 @@ def _model_row(path_field: str, default_model: str = "") -> QWidget:
     status.setMinimumWidth(86)
     status.setStyleSheet(f"color: {FG_MUTE}; font-size: 11px;")
     le.textChanged.connect(lambda _t: (status.setText(""), None)[1])
-    check = _hf_check_button(le, status, default_model)
+    check = _hf_check_button(le, status, default_model, family=family)
 
     h.addWidget(le, 1)
     h.addWidget(browse)
@@ -602,7 +684,7 @@ def _build_services(window) -> QWidget:
         "HuggingFace repo ID (auto-downloaded) or local path to a "
         "Whisper-family model. Empty = use the built-in default "
         "shown as placeholder."),
-        _model_row("stt_model_path", _STT_DEFAULT)))
+        _model_row("stt_model_path", _STT_DEFAULT, family="whisper")))
     s_body.addWidget(_row(_label("Device",
         "Falls back to CPU automatically if torch.cuda.is_available() is False."),
         _combo("stt_device", [("cpu", "CPU"), ("cuda", "GPU (CUDA)")])))
@@ -664,7 +746,7 @@ def _build_services(window) -> QWidget:
         "HuggingFace repo ID. Default = `hexgrad/Kokoro-82M` (54 voices, "
         "9 language families). Empty = use the built-in default shown as "
         "placeholder."),
-        _model_row("tts_model_path", _TTS_DEFAULT)))
+        _model_row("tts_model_path", _TTS_DEFAULT, family="kokoro")))
     t_body.addWidget(_row(_label("Device",
         "Falls back to CPU automatically if torch.cuda.is_available() is False."),
         _combo("tts_device", [("cpu", "CPU"), ("cuda", "GPU (CUDA)")])))
