@@ -122,7 +122,7 @@ Optional flags:
 | `-InstallDir <path>` | `~/.voxtype` | Where the venv + scheduled task land. |
 | `-GpuSupport $true\|$false` | `$true` | Install the CUDA wheel of torch (vs. CPU-only). |
 | `-CudaVersion cu130\|cu124\|cpu` | `cu130` | Which torch wheel index. `cu130` = nightly, `cu124` = stable. |
-| `-FlashAttn $true\|$false` | `$true` | Auto-download a Flash-Attention 2 wheel matching your torch + CUDA + Python from [lldacing/flash-attention-windows-wheel](https://github.com/lldacing/flash-attention-windows-wheel) and install it. Unlocks `Attention → flash_attention_2` in Settings (~1.5–2× faster Whisper / Voxtral / Seamless on Ampere+). Auto-skipped when `-GpuSupport $false`. Pass `-FlashAttn $false` to skip on GPU too. |
+| `-FlashAttn $true\|$false` | `$false` | Search community Windows-wheel repos ([mjun0812](https://github.com/mjun0812/flash-attention-prebuild-wheels), [GarfieldHuang](https://github.com/GarfieldHuang/flash-attention-windows-wheel), [jono0301](https://github.com/jono0301/flash-attention-windows-wheels)) for a Flash-Attention 2 wheel matching your torch + CUDA + Python and install it. Unlocks `Attention → flash_attention_2` in Settings (~1.5–2× faster Whisper / Voxtral / Seamless on Ampere+). Off by default because wheel coverage is narrow on `cu130` nightly torch — switch to `-CudaVersion cu124` for the widest match, or leave Attention on `auto` (sdpa is still fast). |
 
 Re-running `setup.ps1` is idempotent at every phase.
 

@@ -24,19 +24,25 @@
 .PARAMETER FlashAttn
     Attempt to install Flash-Attention 2 for ~1.5-2x speedup on
     Whisper / Voxtral / Seamless inference. Requires fp16/bf16 +
-    Ampere+ (RTX 30xx / A100+). On Windows there are no official
-    PyPI wheels, so we sniff the venv's torch+CUDA+python triple and
-    auto-fetch a matching prebuilt wheel from
-    lldacing/flash-attention-windows-wheel. Falls through with a
-    clear warning when no wheel matches or the GPU isn't supported.
-    Default `$true` — pass `-FlashAttn $false` to skip.
+    Ampere+ (RTX 30xx / 40xx / 50xx / A100+).
+
+    There are NO official PyPI Windows wheels. We sniff the venv's
+    torch+CUDA+python triple and search the community Windows-wheel
+    repos (mjun0812 / GarfieldHuang / jono0301) via the GitHub API
+    for a matching prebuilt. Coverage is narrow and lags torch's
+    nightly cu130 path — most users on the default `-CudaVersion cu130`
+    won't find a match and will need to either:
+      a) re-run with `-CudaVersion cu124` (much broader wheel coverage)
+      b) pin torch to a stable version + build from source
+      c) leave Settings -> Attention on 'auto' (sdpa is still fast)
+    Default `$false`. Set `-FlashAttn $true` to opt in.
 #>
 param(
     [string]$InstallDir   = "$env:USERPROFILE\.voxtype",
     [bool]  $GpuSupport   = $true,
     [ValidateSet("cu130", "cu124", "cpu")]
     [string]$CudaVersion  = "cu130",
-    [bool]  $FlashAttn    = $true
+    [bool]  $FlashAttn    = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -211,57 +217,74 @@ print(json.dumps(out))
     } else {
         $py = $env.py; $tv = $env.torch; $cu = "cu" + $env.cuda
         Write-Host "    Detected: python=$py, torch=$tv, cuda=$cu" -ForegroundColor DarkGray
-        Write-Host "    Querying lldacing/flash-attention-windows-wheel release index..." -ForegroundColor DarkGray
+        Write-Host "    Searching community Windows-wheel repos via GitHub API..." -ForegroundColor DarkGray
 
+        # Candidate repos that publish flash-attn Windows wheels.
+        # mjun0812 has the broadest matrix; the cu130/sm_120 (Blackwell)
+        # repos cover RTX 50-series + CUDA 13 specifically.
         $resolve = @"
 import json, sys, urllib.request
 PY, TORCH, CUDA = "$py", "$tv", "$cu"
-url = "https://api.github.com/repos/lldacing/flash-attention-windows-wheel/releases?per_page=30"
-req = urllib.request.Request(url, headers={"Accept":"application/json", "User-Agent":"voxtype-setup/1.0"})
-try:
-    with urllib.request.urlopen(req, timeout=15) as r:
-        releases = json.loads(r.read().decode("utf-8"))
-except Exception as e:
-    print(f"ERROR query failed: {e}")
-    sys.exit(1)
-# Search every release's assets for a wheel matching our triple.
+
+REPOS = [
+    "mjun0812/flash-attention-prebuild-wheels",
+    "GarfieldHuang/flash-attention-windows-wheel",
+    "jono0301/flash-attention-windows-wheels",
+]
+
+def fetch(url):
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/json",
+        "User-Agent": "voxtype-setup/1.0",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
 needle_torch = TORCH.rsplit(".dev", 1)[0].rsplit("+", 1)[0]
-# Wheels follow pattern: flash_attn-X+cuYYYtorchZ.Z.Zcxx11abiFALSE-cpPP-cpPP-win_amd64.whl
-hit = None
-for rel in releases:
-    for a in rel.get("assets", []):
-        n = a.get("name", "")
-        if not n.endswith("-win_amd64.whl"): continue
-        if CUDA not in n: continue
-        if f"torch{needle_torch}" not in n: continue
-        if f"-{PY}-" not in n: continue
-        hit = (n, a.get("browser_download_url"))
-        break
-    if hit: break
-if not hit:
-    # Soften: any matching torch + CUDA + python, even if minor differs.
-    for rel in releases:
+needle_minor = needle_torch.rsplit(".", 1)[0]
+
+def search(releases, strict):
+    for rel in releases or []:
         for a in rel.get("assets", []):
             n = a.get("name", "")
             if not n.endswith("-win_amd64.whl"): continue
             if CUDA not in n: continue
             if f"-{PY}-" not in n: continue
-            if "torch" + needle_torch.rsplit(".", 1)[0] in n:
-                hit = (n, a.get("browser_download_url"))
-                break
-        if hit: break
+            if strict and f"torch{needle_torch}" not in n: continue
+            if (not strict) and f"torch{needle_minor}" not in n: continue
+            return (n, a.get("browser_download_url"))
+    return None
+
+hit = None
+for repo in REPOS:
+    releases = fetch(f"https://api.github.com/repos/{repo}/releases?per_page=30")
+    hit = search(releases, strict=True) or search(releases, strict=False)
+    if hit:
+        print(f"REPO {repo}", file=sys.stderr)
+        break
+
 if not hit:
     print("ERROR no matching wheel")
     sys.exit(2)
 print(hit[1])
 "@
         $wheelUrl = & $voxPython -c $resolve 2>&1
-        if ($LASTEXITCODE -ne 0 -or $wheelUrl -like "ERROR*") {
-            Warn "Couldn't find a matching flash-attn wheel for python=$py torch=$tv $cu."
-            Warn "Browse the release page manually:"
-            Warn "  https://github.com/lldacing/flash-attention-windows-wheel/releases"
-            Warn "Download a wheel matching your torch/CUDA/python and run:"
-            Warn "  & '$voxVenv\Scripts\pip.exe' install <wheel.whl>"
+        if ($LASTEXITCODE -ne 0 -or $wheelUrl -match "ERROR") {
+            Warn "No prebuilt Flash-Attn wheel matched python=$py torch=$tv $cu."
+            Warn "Likely cause: torch nightly + cu130 has narrow wheel coverage on Windows."
+            Warn "Options:"
+            Warn "  1) Re-run setup with -CudaVersion cu124 (much broader Flash-Attn coverage)"
+            Warn "  2) Pin torch to a stable version (2.5.1 / 2.6 / 2.7) and re-run -FlashAttn"
+            Warn "  3) Build from source: requires CUDA toolkit + MSVC, ~30 min"
+            Warn "     `& '$voxVenv\Scripts\pip.exe' install flash-attn --no-build-isolation`"
+            Warn "  4) Leave Settings -> Attention on 'auto' (sdpa is already fast on Ampere+)"
+            Warn "Browse the wheel repos manually if you want to download one yourself:"
+            Warn "  https://github.com/mjun0812/flash-attention-prebuild-wheels/releases"
+            Warn "  https://github.com/GarfieldHuang/flash-attention-windows-wheel/releases"
+            Warn "  https://github.com/jono0301/flash-attention-windows-wheels/releases"
         } else {
             $wheelUrl = ($wheelUrl | Select-Object -Last 1).ToString().Trim()
             $wheelFile = Join-Path $env:TEMP (Split-Path -Leaf $wheelUrl)
