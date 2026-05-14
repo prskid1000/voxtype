@@ -150,12 +150,19 @@ class TTSEngine:
         return default_model_for(self._effective_backend_name())
 
     def _effective_voice(self) -> str:
+        """Validate the configured voice against the ACTIVE backend's
+        catalog. This is the key robustness gate: if the user switches
+        backends in settings.json (kokoro voice → piper backend) without
+        also updating tts_speaker, we transparently fall back to that
+        backend's default instead of trying to load a voice the new
+        backend doesn't know about."""
+        backend_name = self._effective_backend_name()
+        default = default_voice_for(backend_name)
         v = (self._speaker or "").strip()
-        if not v:
-            return default_voice_for(self._effective_backend_name())
-        # Reject leftover legacy values that can't be voice ids.
-        if v.isdigit() or len(v) < 3:
-            return default_voice_for(self._effective_backend_name())
+        if not v or v.isdigit() or len(v) < 3:
+            return default
+        if v not in all_voice_ids(backend_name):
+            return default
         return v
 
     def _key(self) -> tuple:
@@ -269,6 +276,13 @@ class TTSEngine:
         v = (voice or "").strip() if isinstance(voice, str) else ""
         if not v:
             v = self._effective_voice()
+        else:
+            # Per-call voice override: validate against active backend.
+            backend_name = self._effective_backend_name()
+            if v not in all_voice_ids(backend_name):
+                log.debug("tts: per-call voice %r not in %s catalog — using effective default",
+                          v, backend_name)
+                v = self._effective_voice()
         # Speed only applies if the backend honours it.
         backend = self._backend
         supports_speed = backend.supports("speed") if backend is not None else True

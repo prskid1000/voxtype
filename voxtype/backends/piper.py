@@ -163,6 +163,13 @@ class PiperBackend(TTSBackend):
 
     def synth_chunks_sync(self, text: str, voice: str, speed: float) -> Iterator[bytes]:
         v = voice or self.default_voice
+        # Final guard: if the requested voice isn't in our curated map
+        # (e.g. caller bypassed the orchestrator's validation), fall back
+        # to the backend default instead of failing to download a file
+        # we don't know how to resolve.
+        if v not in self._quality_by_id:
+            log.warning("piper: unknown voice %r — using %s", v, self.default_voice)
+            v = self.default_voice
         # Swap voice file if the user picked a different one.
         if v != self._voice_id:
             self._load_voice(v)
