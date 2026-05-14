@@ -750,14 +750,20 @@ def _build_services(window) -> QWidget:
     t_body.addWidget(_row(_label("Device",
         "Falls back to CPU automatically if torch.cuda.is_available() is False."),
         _combo("tts_device", [("cpu", "CPU"), ("cuda", "GPU (CUDA)")])))
+    from voxtype.tts_engine import (
+        voice_combo_options as _tts_voices,
+        all_voice_ids as _tts_voice_ids,
+        DEFAULT_VOICE as _TTS_DEFAULT_VOICE,
+    )
+    # Migrate legacy values (e.g. "0" from the pre-PyTorch integer-speaker
+    # era) to the new default so the combo lands on a real voice.
+    if str(getattr(config.load(), "tts_speaker", "")) not in _tts_voice_ids():
+        config.patch("tts_speaker", _TTS_DEFAULT_VOICE)
     t_body.addWidget(_row(_label("Voice",
-        "Kokoro voice name. Prefix encodes language + gender:\n"
-        " a{f,m}_*  American English  (af_heart, am_adam, …)\n"
-        " b{f,m}_*  British English   (bf_emma, bm_george, …)\n"
-        " e{f,m}_*  Spanish · f_  French · h_  Hindi · i_  Italian\n"
-        " j{f,m}_*  Japanese (jf_alpha, jm_kumo)\n"
-        " p{f,m}_*  Brazilian Portuguese · z{f,m}_*  Mandarin Chinese"),
-        _line_edit("tts_speaker")))
+        "Pick from Kokoro's 54 voices. The id prefix encodes language "
+        "and gender (a/b=Am/Br-En, e=es, f=fr, h=hi, i=it, j=ja, "
+        "p=pt-br, z=zh; second letter f=female, m=male)."),
+        _combo("tts_speaker", _tts_voices())))
     t_body.addWidget(_row(_label("Speed",
         "Synthesis rate. 1.0 = normal, >1 = faster, <1 = slower."),
         _slider_float("tts_length_scale", 0.5, 2.0, 0.05, suffix="x")))

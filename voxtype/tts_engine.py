@@ -47,6 +47,102 @@ DEFAULT_MODEL = "hexgrad/Kokoro-82M"
 DEFAULT_VOICE = "af_heart"
 
 
+# ── Voice catalog ────────────────────────────────────────────────────
+# All 54 Kokoro-82M voices, grouped by (lang_family, gender) for UI
+# rendering. Format: list of (voice_id, gender, display_name).
+# Lang families: a=Am-En, b=Br-En, e=es, f=fr, h=hi, i=it, j=ja,
+# p=pt-br, z=zh. Source: hexgrad/Kokoro-82M model card.
+VOICES: dict[str, list[tuple[str, str, str]]] = {
+    "American English": [
+        ("af_alloy",   "F", "Alloy"),
+        ("af_aoede",   "F", "Aoede"),
+        ("af_bella",   "F", "Bella"),
+        ("af_heart",   "F", "Heart"),
+        ("af_jessica", "F", "Jessica"),
+        ("af_kore",    "F", "Kore"),
+        ("af_nicole",  "F", "Nicole"),
+        ("af_nova",    "F", "Nova"),
+        ("af_river",   "F", "River"),
+        ("af_sarah",   "F", "Sarah"),
+        ("af_sky",     "F", "Sky"),
+        ("am_adam",    "M", "Adam"),
+        ("am_echo",    "M", "Echo"),
+        ("am_eric",    "M", "Eric"),
+        ("am_fenrir",  "M", "Fenrir"),
+        ("am_liam",    "M", "Liam"),
+        ("am_michael", "M", "Michael"),
+        ("am_onyx",    "M", "Onyx"),
+        ("am_puck",    "M", "Puck"),
+        ("am_santa",   "M", "Santa"),
+    ],
+    "British English": [
+        ("bf_alice",    "F", "Alice"),
+        ("bf_emma",     "F", "Emma"),
+        ("bf_isabella", "F", "Isabella"),
+        ("bf_lily",     "F", "Lily"),
+        ("bm_daniel",   "M", "Daniel"),
+        ("bm_fable",    "M", "Fable"),
+        ("bm_george",   "M", "George"),
+        ("bm_lewis",    "M", "Lewis"),
+    ],
+    "Spanish": [
+        ("ef_dora",  "F", "Dora"),
+        ("em_alex",  "M", "Alex"),
+        ("em_santa", "M", "Santa"),
+    ],
+    "French": [
+        ("ff_siwis", "F", "Siwis"),
+    ],
+    "Hindi": [
+        ("hf_alpha", "F", "Alpha"),
+        ("hf_beta",  "F", "Beta"),
+        ("hm_omega", "M", "Omega"),
+        ("hm_psi",   "M", "Psi"),
+    ],
+    "Italian": [
+        ("if_sara",   "F", "Sara"),
+        ("im_nicola", "M", "Nicola"),
+    ],
+    "Japanese": [
+        ("jf_alpha",      "F", "Alpha"),
+        ("jf_gongitsune", "F", "Gongitsune"),
+        ("jf_nezumi",     "F", "Nezumi"),
+        ("jf_tebukuro",   "F", "Tebukuro"),
+        ("jm_kumo",       "M", "Kumo"),
+    ],
+    "Brazilian Portuguese": [
+        ("pf_dora",  "F", "Dora"),
+        ("pm_alex",  "M", "Alex"),
+        ("pm_santa", "M", "Santa"),
+    ],
+    "Mandarin Chinese": [
+        ("zf_xiaobei",  "F", "Xiaobei"),
+        ("zf_xiaoni",   "F", "Xiaoni"),
+        ("zf_xiaoxiao", "F", "Xiaoxiao"),
+        ("zf_xiaoyi",   "F", "Xiaoyi"),
+        ("zm_yunjian",  "M", "Yunjian"),
+        ("zm_yunxi",    "M", "Yunxi"),
+        ("zm_yunxia",   "M", "Yunxia"),
+        ("zm_yunyang",  "M", "Yunyang"),
+    ],
+}
+
+
+def all_voice_ids() -> set[str]:
+    """Flat set of every known Kokoro voice id."""
+    return {vid for group in VOICES.values() for vid, _, _ in group}
+
+
+def voice_combo_options() -> list[tuple[str, str]]:
+    """Returns (value, label) tuples suitable for a QComboBox.
+    Label format: `af_heart  ·  American English · F · Heart`."""
+    out: list[tuple[str, str]] = []
+    for lang, items in VOICES.items():
+        for vid, gender, name in items:
+            out.append((vid, f"{vid}  ·  {lang} · {gender} · {name}"))
+    return out
+
+
 # ── Status type ──────────────────────────────────────────────────────
 
 @dataclass
@@ -114,7 +210,15 @@ class TTSEngine:
         return self._model_path or DEFAULT_MODEL
 
     def _effective_voice(self) -> str:
-        return (self._speaker or "").strip() or DEFAULT_VOICE
+        v = (self._speaker or "").strip()
+        if not v:
+            return DEFAULT_VOICE
+        # Reject leftover integer-speaker values from the pre-PyTorch era
+        # ("0", "1", …) and anything that doesn't look like a Kokoro voice
+        # id (prefix is two letters then underscore).
+        if v.isdigit() or len(v) < 4 or v[2] != "_":
+            return DEFAULT_VOICE
+        return v
 
     def _key(self) -> tuple:
         # Only fields that require a pipeline rebuild belong here.
