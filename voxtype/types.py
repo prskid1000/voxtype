@@ -15,9 +15,10 @@ HotkeyMode = Literal["hold", "toggle"]
 TorchDevice = Literal["cpu", "cuda"]
 # Pluggable engine backend names. Real list comes from
 # voxtype.backends.{stt,tts}_backend_names() at runtime — these literals
-# are just for type-hint clarity. Unknown values fall back to defaults.
-STTBackendName = Literal["whisper", "faster-whisper"]
-TTSBackendName = Literal["kokoro", "piper"]
+# are just for type-hint clarity. New entries land here whenever
+# additional backends are registered in voxtype/backends/__init__.py.
+STTBackendName = Literal["whisper"]
+TTSBackendName = Literal["kokoro"]
 # Inference precision. `auto` = fp16 on CUDA, fp32 on CPU. `bf16` needs
 # Ampere+ (RTX 30xx / A100+) — same speed as fp16, wider numeric range.
 TorchDtype = Literal["auto", "fp32", "fp16", "bf16"]

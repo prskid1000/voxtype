@@ -15,16 +15,12 @@ pywin32>=306; platform_system == "Windows"
 # picks the right index URL based on -GpuSupport.
 torch>=2.4
 
-# STT backends — pluggable. `whisper` is the default (transformers
-# reference impl); `faster-whisper` is the CTranslate2 alternative
-# (~4× faster GPU, int8 CPU). Both are Whisper-family and share the
-# HF model cache.
+# STT backend — pluggable. Currently ships `whisper` (HuggingFace
+# transformers + WhisperForConditionalGeneration). New backends slot
+# into voxtype/backends/ and register themselves in __init__.py.
 transformers>=4.45
 huggingface_hub>=0.24
-faster-whisper>=1.0      # CTranslate2-based Whisper backend
 
-# TTS backends — pluggable. `kokoro` is the default (PyTorch, 54
-# voices, 9 langs); `piper` is the lightweight ONNX alternative
-# (~150 voices, 30+ langs, ~50 MB/voice, fast on CPU).
+# TTS backend — pluggable. Currently ships `kokoro` (kokoro PyPI +
+# Kokoro-82M; 54 voices across 9 langs, PyTorch).
 kokoro>=0.5
-piper-tts>=1.2           # rhasspy/piper, ONNX-based

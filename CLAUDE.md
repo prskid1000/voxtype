@@ -104,18 +104,14 @@ The backend owns:
   - **`whisper`** — `transformers.WhisperForConditionalGeneration` +
     `AutoProcessor`. Broadest feature set (initial_prompt, torch.compile,
     bf16, translate-to-EN). Default: `openai/whisper-base`.
-  - **`faster-whisper`** — `faster_whisper.WhisperModel` (CTranslate2).
-    ~4× faster on GPU, int8 mode on CPU. Same model checkpoints. Doesn't
-    support torch.compile (CT2 has its own kernels) or bf16 → those
-    rows show but are ignored by `supports()`.
 
 **TTS** (registered in `backends/__init__.py`):
   - **`kokoro`** — `kokoro.KPipeline`. 54 voices across 9 lang_codes.
     PyTorch, native per-sentence streaming. Default: `hexgrad/Kokoro-82M`.
-  - **`piper`** — `piper.PiperVoice` (ONNX-based). Curated list of ~20
-    voices in major languages, .onnx auto-downloaded to
-    `~/.cache/voxtype-piper/` on first use. Doesn't support
-    torch.compile (ONNX, not torch).
+
+The pluggable framework is in place; alternative backends
+(faster-whisper, piper, parakeet, coqui, …) will be added when
+there's a concrete need.
 
 ### Adding a backend
 
@@ -208,7 +204,7 @@ class AppSettings:
     server_enabled: bool = True
     server_port: int = 6600
 
-    # STT (pluggable: whisper | faster-whisper)
+    # STT (pluggable; currently ships "whisper")
     stt_enabled: bool = True
     stt_auto_start: bool = True
     stt_idle_unload_sec: int = 300
@@ -223,7 +219,7 @@ class AppSettings:
     stt_warmup: bool = True                   # dummy infer after load
     stt_torch_compile: bool = False           # +20-40% steady-state
 
-    # TTS (pluggable: kokoro | piper)
+    # TTS (pluggable; currently ships "kokoro")
     tts_enabled: bool = False
     tts_auto_start: bool = False
     tts_idle_unload_sec: int = 600

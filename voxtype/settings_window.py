@@ -670,12 +670,11 @@ def _build_services(window) -> QWidget:
     # ── STT card ───────────────────────────────────────────────────
     from voxtype.stt_engine import available_backends as _stt_backends_fn
     _stt_backends = _stt_backends_fn() or ["whisper"]
-    s_card, s_body = _card("STT", "pluggable speech-to-text · whisper / faster-whisper")
+    s_card, s_body = _card("STT", "pluggable speech-to-text · whisper")
     s_body.addWidget(_row(_label("Backend",
-        "Engine library used for transcription.\n"
-        "  whisper        — HuggingFace transformers; broadest features.\n"
-        "  faster-whisper — CTranslate2; ~4× faster GPU, int8 CPU mode.\n"
-        "Both use Whisper-family checkpoints (openai/whisper-* etc.)."),
+        "Engine library used for transcription. Currently ships `whisper` "
+        "(HuggingFace transformers). Additional backends slot in here as "
+        "they're added to voxtype/backends/."),
         _combo("stt_backend", [(n, n) for n in _stt_backends])))
     s_body.addWidget(_row(_label("Enabled"),
         _checkbox("stt_enabled", "Run STT")))
@@ -752,12 +751,11 @@ def _build_services(window) -> QWidget:
     # ── TTS card ───────────────────────────────────────────────────
     from voxtype.tts_engine import available_backends as _tts_backends_fn
     _tts_backends = _tts_backends_fn() or ["kokoro"]
-    t_card, t_body = _card("TTS", "pluggable text-to-speech · kokoro / piper")
+    t_card, t_body = _card("TTS", "pluggable text-to-speech · kokoro")
     t_body.addWidget(_row(_label("Backend",
-        "Engine library used for synthesis.\n"
-        "  kokoro — 54 voices, 9 langs, ~327 MB, PyTorch.\n"
-        "  piper  — ~150 voices, 30+ langs, ~50 MB/voice, ONNX (CPU-fast).\n"
-        "After switching, reopen Settings to refresh the Voice list."),
+        "Engine library used for synthesis. Currently ships `kokoro` "
+        "(Kokoro-82M, 54 voices across 9 languages). Additional backends "
+        "slot in here as they're added to voxtype/backends/."),
         _combo("tts_backend", [(n, n) for n in _tts_backends])))
     t_body.addWidget(_row(_label("Enabled"),
         _checkbox("tts_enabled", "Run TTS")))
@@ -791,10 +789,9 @@ def _build_services(window) -> QWidget:
     if str(getattr(config.load(), "tts_speaker", "")) not in _active_voice_ids:
         config.patch("tts_speaker", _active_default_voice)
     t_body.addWidget(_row(_label("Voice",
-        "Backend-specific voice catalog. Kokoro: 54 voices across 9 "
-        "languages. Piper: ~150 voices across 30+ languages, curated to "
-        "the popular ones. Switch backend + reopen Settings to see "
-        "the other catalog."),
+        "Voice catalog for the active backend. Kokoro: 54 voices across "
+        "9 languages (a/b=Am/Br-En, e=es, f=fr, h=hi, i=it, j=ja, "
+        "p=pt-br, z=zh; second letter f=female, m=male)."),
         _combo("tts_speaker", _tts_voices(_tts_active_backend))))
     t_body.addWidget(_row(_label("Speed",
         "Synthesis rate. 1.0 = normal, >1 = faster, <1 = slower."),
