@@ -157,6 +157,12 @@ stt_initial_prompt, tts_speaker, tts_length_scale, tts_stream.
 
 **Applied on next load only**: stt_warmup, tts_warmup.
 
+**Settings → engine propagation**: `configure()` runs (a) at boot, (b)
+before every local-hotkey STT press, (c) on tray Load/Reload, AND (d)
+at the start of every `/v1/audio/transcriptions` and `/v1/audio/speech`
+HTTP request. So changes made in the UI take effect on the next call
+no matter how STT/TTS is invoked — no tray Reload required.
+
 **Requires server restart**: server_port. Use the "Restart" button in
 the Server card.
 

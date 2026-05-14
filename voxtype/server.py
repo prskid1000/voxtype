@@ -29,7 +29,7 @@ from typing import Any
 
 from aiohttp import web
 
-from voxtype import stt_engine, tts_engine
+from voxtype import config, stt_engine, tts_engine
 
 log = logging.getLogger("voxtype.server")
 
@@ -150,7 +150,13 @@ async def handle_transcribe(request: web.Request) -> web.Response:
         log.error("transcribe: decode failed: %s", exc)
         raise web.HTTPBadRequest(reason=f"audio decode failed: {exc}")
     try:
-        text = await stt_engine.get_engine().transcribe(pcm, language or None)
+        # Pull latest settings into the engine before each call so UI
+        # edits (task / num_beams / initial_prompt / dtype / compile)
+        # apply to HTTP-driven STT without requiring a tray Reload.
+        # configure() is cheap — it only unloads if _key() changed.
+        eng = stt_engine.get_engine()
+        await eng.configure(config.load())
+        text = await eng.transcribe(pcm, language or None)
     except Exception as exc:
         log.error("transcribe: engine failed: %s", exc)
         return web.json_response({"error": str(exc)}, status=500)
@@ -207,6 +213,13 @@ async def handle_speech(request: web.Request) -> web.Response:
         speed = None
 
     engine = tts_engine.get_engine()
+    # Pull latest settings before each call so UI edits (lang_code /
+    # warmup / torch_compile / stream / voice / speed) take effect
+    # without a tray Reload. Cheap; only unloads on real _key() diff.
+    try:
+        await engine.configure(config.load())
+    except Exception as exc:
+        log.warning("speech: configure failed (%s); using last config", exc)
     want_stream = bool(body.get("stream", engine.stream_default))
 
     if want_stream:
