@@ -688,9 +688,19 @@ def _build_services(window) -> QWidget:
     s_body.addWidget(_row(_label("Device",
         "Falls back to CPU automatically if torch.cuda.is_available() is False."),
         _combo("stt_device", [("cpu", "CPU"), ("cuda", "GPU (CUDA)")])))
+    from voxtype.stt_engine import (
+        language_combo_options as _stt_langs,
+        all_language_codes as _stt_lang_codes,
+    )
+    # Self-heal stale or typo'd values (e.g. an old "en-US" that Whisper
+    # would reject) by snapping them to "en" before showing the combo.
+    if str(getattr(config.load(), "stt_language", "")) not in _stt_lang_codes():
+        config.patch("stt_language", "en")
     s_body.addWidget(_row(_label("Language",
-        "ISO 639-1 code (en, de, ja, etc.). Leave 'en' for English."),
-        _line_edit("stt_language")))
+        "Whisper decoder hint. Pick `Auto-detect` to let Whisper guess "
+        "from audio (slightly slower; can mis-detect short clips). "
+        "Otherwise pick the language you'll be speaking."),
+        _combo("stt_language", _stt_langs())))
     s_body.addWidget(_row(_label("Task",
         "transcribe = output source language. translate = output English "
         "regardless of source (Whisper's built-in translation mode)."),

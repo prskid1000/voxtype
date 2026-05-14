@@ -32,6 +32,62 @@ log = logging.getLogger("voxtype.stt_engine")
 DEFAULT_MODEL = "openai/whisper-base"
 
 
+# ── Language catalog ─────────────────────────────────────────────────
+# All 99 languages the Whisper tokenizer recognizes, plus "auto" to
+# disable the explicit language hint and let Whisper detect from audio.
+# ISO 639-1 codes (Whisper uses these directly in `generate(language=)`).
+# Order: auto first, then alphabetised by human name for the UI combo.
+LANGUAGES: list[tuple[str, str]] = [
+    ("auto", "Auto-detect"),
+    ("af",  "Afrikaans"), ("am",  "Amharic"),   ("ar",  "Arabic"),
+    ("as",  "Assamese"),  ("az",  "Azerbaijani"),("ba",  "Bashkir"),
+    ("be",  "Belarusian"),("bn",  "Bengali"),   ("bo",  "Tibetan"),
+    ("br",  "Breton"),    ("bs",  "Bosnian"),   ("bg",  "Bulgarian"),
+    ("ca",  "Catalan"),   ("cs",  "Czech"),     ("cy",  "Welsh"),
+    ("da",  "Danish"),    ("de",  "German"),    ("el",  "Greek"),
+    ("en",  "English"),   ("es",  "Spanish"),   ("et",  "Estonian"),
+    ("eu",  "Basque"),    ("fa",  "Persian"),   ("fi",  "Finnish"),
+    ("fo",  "Faroese"),   ("fr",  "French"),    ("gl",  "Galician"),
+    ("gu",  "Gujarati"),  ("ha",  "Hausa"),     ("haw", "Hawaiian"),
+    ("he",  "Hebrew"),    ("hi",  "Hindi"),     ("hr",  "Croatian"),
+    ("ht",  "Haitian Creole"),                   ("hu",  "Hungarian"),
+    ("hy",  "Armenian"),  ("id",  "Indonesian"),("is",  "Icelandic"),
+    ("it",  "Italian"),   ("ja",  "Japanese"),  ("jw",  "Javanese"),
+    ("ka",  "Georgian"),  ("kk",  "Kazakh"),    ("km",  "Khmer"),
+    ("kn",  "Kannada"),   ("ko",  "Korean"),    ("la",  "Latin"),
+    ("lb",  "Luxembourgish"),                    ("ln",  "Lingala"),
+    ("lo",  "Lao"),       ("lt",  "Lithuanian"),("lv",  "Latvian"),
+    ("mg",  "Malagasy"),  ("mi",  "Maori"),     ("mk",  "Macedonian"),
+    ("ml",  "Malayalam"), ("mn",  "Mongolian"), ("mr",  "Marathi"),
+    ("ms",  "Malay"),     ("mt",  "Maltese"),   ("my",  "Burmese"),
+    ("ne",  "Nepali"),    ("nl",  "Dutch"),     ("nn",  "Norwegian Nynorsk"),
+    ("no",  "Norwegian"), ("oc",  "Occitan"),   ("pa",  "Punjabi"),
+    ("pl",  "Polish"),    ("ps",  "Pashto"),    ("pt",  "Portuguese"),
+    ("ro",  "Romanian"),  ("ru",  "Russian"),   ("sa",  "Sanskrit"),
+    ("sd",  "Sindhi"),    ("si",  "Sinhala"),   ("sk",  "Slovak"),
+    ("sl",  "Slovenian"), ("sn",  "Shona"),     ("so",  "Somali"),
+    ("sq",  "Albanian"),  ("sr",  "Serbian"),   ("su",  "Sundanese"),
+    ("sv",  "Swedish"),   ("sw",  "Swahili"),   ("ta",  "Tamil"),
+    ("te",  "Telugu"),    ("tg",  "Tajik"),     ("th",  "Thai"),
+    ("tk",  "Turkmen"),   ("tl",  "Tagalog"),   ("tr",  "Turkish"),
+    ("tt",  "Tatar"),     ("uk",  "Ukrainian"), ("ur",  "Urdu"),
+    ("uz",  "Uzbek"),     ("vi",  "Vietnamese"),("yi",  "Yiddish"),
+    ("yo",  "Yoruba"),    ("yue", "Cantonese"), ("zh",  "Chinese"),
+]
+
+
+def all_language_codes() -> set[str]:
+    return {code for code, _ in LANGUAGES}
+
+
+def language_combo_options() -> list[tuple[str, str]]:
+    """(value, label) tuples for a QComboBox. Labels like `en — English`."""
+    return [
+        (code, name if code == "auto" else f"{code} — {name}")
+        for code, name in LANGUAGES
+    ]
+
+
 # ── Status type ──────────────────────────────────────────────────────
 
 @dataclass
@@ -265,11 +321,14 @@ class STTEngine:
         )
 
         gen_kwargs: dict = {
-            "language": language,
             "task": self._task or "transcribe",
             "max_new_tokens": 440,
             "num_beams": max(1, int(self._num_beams or 1)),
         }
+        # `auto` = let Whisper detect language from the audio. Any other
+        # value is passed through as the explicit hint.
+        if language and language.lower() != "auto":
+            gen_kwargs["language"] = language
         if self._initial_prompt:
             try:
                 prompt_ids = self._processor.get_prompt_ids(
