@@ -287,10 +287,11 @@ async def enhance(
         "max_tokens": 4096,
         "response_format": _SCHEMA,
         # Transcript cleanup is a fixed-format rewrite — there's nothing
-        # for reasoning to figure out. The proxy resolves this through the
-        # active model's `reasoning_effort_map["none"]` entry (typically
-        # thinking_budget_tokens=0, which maps to llama.cpp's
-        # reasoning_budget=0 → immediate end-of-thinking).
+        # for reasoning to figure out. The proxy resolves this to whatever
+        # the active model's `reasoning_effort_map["none"]` declares
+        # (enable_thinking=false + thinking_budget_tokens=0 for Qwen, a
+        # different set of kwargs for other families). No Qwen-specific
+        # knobs hardcoded here.
         "reasoning_effort": "none",
     }
 
