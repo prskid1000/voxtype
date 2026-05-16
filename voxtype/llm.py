@@ -287,13 +287,10 @@ async def enhance(
         "max_tokens": 4096,
         "response_format": _SCHEMA,
         # Transcript cleanup is a fixed-format rewrite — there's nothing
-        # for reasoning to figure out. Telecode's proxy resolves this via
-        # the active model's `reasoning_effort_map["none"]` entry, which
-        # combines llama.cpp's `thinking_budget_tokens` (universal cap)
-        # with any per-model `chat_template_kwargs` (e.g. Qwen's
-        # `enable_thinking: false`). Generic mechanism on the wire;
-        # model-specific kwarg values live in telecode's settings.json,
-        # not here.
+        # for reasoning to figure out. The proxy resolves this through the
+        # active model's `reasoning_effort_map["none"]` entry (typically
+        # thinking_budget_tokens=0, which maps to llama.cpp's
+        # reasoning_budget=0 → immediate end-of-thinking).
         "reasoning_effort": "none",
     }
 
