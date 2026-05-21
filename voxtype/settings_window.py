@@ -347,8 +347,73 @@ def _build_dictation(window) -> QWidget:
         _checkbox("save_history", "Enabled")))
 
     layout.addWidget(card)
+
+    # ── Recording Sounds card ──────────────────────────────────────
+    sound_card, sound_body = _card("Recording Sounds",
+        "Audio cues for record / stop / done")
+    sound_body.addWidget(_row(_label("Sounds",
+        "Play short audio cues on record start, record stop, and "
+        "transcript-typed."),
+        _checkbox("sounds_enabled", "Enabled")))
+    sound_body.addWidget(_row(_label("Start Recording",
+        "Played when the hotkey is pressed. Empty = built-in tone."),
+        _sound_file_row("sound_start", "start")))
+    sound_body.addWidget(_row(_label("Stop Recording",
+        "Played when the hotkey is released (or silence auto-stop fires)."),
+        _sound_file_row("sound_stop", "stop")))
+    sound_body.addWidget(_row(_label("Processing Complete",
+        "Played after the cleaned transcript has been pasted."),
+        _sound_file_row("sound_done", "done")))
+    layout.addWidget(sound_card)
     layout.addStretch(1)
     return scroll
+
+
+def _sound_file_row(path_field: str, cue: str) -> QWidget:
+    """[text field] [Browse…] [Test] [Reset]. Empty path → built-in tone."""
+    from PySide6.QtWidgets import QFileDialog
+    from voxtype import sounds
+
+    w = QWidget()
+    h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+
+    le = QLineEdit()
+    le.setText(str(getattr(config.load(), path_field, "") or ""))
+    le.setPlaceholderText("(built-in tone)")
+    le.editingFinished.connect(lambda: config.patch(path_field, le.text()))
+
+    browse = QPushButton("Browse…"); browse.setProperty("class", "ghost")
+    browse.setFixedWidth(82)
+    test = QPushButton("Test"); test.setProperty("class", "ghost")
+    test.setFixedWidth(56)
+    reset = QPushButton("Reset"); reset.setProperty("class", "ghost")
+    reset.setFixedWidth(60)
+
+    def _on_browse() -> None:
+        fn, _ = QFileDialog.getOpenFileName(
+            w, "Select sound file", le.text() or "",
+            "Audio files (*.wav *.flac *.ogg *.mp3);;All files (*.*)",
+        )
+        if fn:
+            le.setText(fn)
+            config.patch(path_field, fn)
+
+    def _on_test() -> None:
+        sounds.play(cue, le.text().strip())  # type: ignore[arg-type]
+
+    def _on_reset() -> None:
+        le.setText("")
+        config.patch(path_field, "")
+
+    browse.clicked.connect(_on_browse)
+    test.clicked.connect(_on_test)
+    reset.clicked.connect(_on_reset)
+
+    h.addWidget(le, 1)
+    h.addWidget(browse)
+    h.addWidget(test)
+    h.addWidget(reset)
+    return w
 
 
 def _line_edit_static(text: str) -> QLineEdit:

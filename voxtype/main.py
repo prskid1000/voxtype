@@ -25,7 +25,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, QObject, QTimer, Signal, Slot, QCoreApplication
 from PySide6.QtWidgets import QApplication
 
-from voxtype import config, debug_log, process, stt, llm, server, stt_engine, tts_engine
+from voxtype import config, debug_log, process, stt, llm, server, sounds, stt_engine, tts_engine
 from voxtype.audio import Recorder
 from voxtype.hotkey import HotkeyListener
 from voxtype.pill_window import PillWindow
@@ -182,6 +182,8 @@ class Orchestrator(QObject):
             return
         self._recording_since = time.monotonic()
         self._set_pill("recording", "")
+        if s.sounds_enabled:
+            sounds.play("start", s.sound_start)
 
     def _on_auto_silence(self) -> None:
         """Called from a worker thread when the recorder hits
@@ -215,6 +217,8 @@ class Orchestrator(QObject):
             self._flash_error("No speech detected")
             return
 
+        if s.sounds_enabled:
+            sounds.play("stop", s.sound_stop)
         self._set_pill("processing", "")
         self._pipeline_future = self._loop.submit(self._pipeline(pcm, s))
 
@@ -305,6 +309,8 @@ class Orchestrator(QObject):
 
         # Brief pause so the pill's "typing" tick is visible
         await asyncio.sleep(0.4)
+        if s.sounds_enabled:
+            sounds.play("done", s.sound_done)
         self.pill_state_req.emit("idle", "")
 
     # ── Engines / proxy ──────────────────────────────────────────────

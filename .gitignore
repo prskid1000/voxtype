@@ -5,6 +5,8 @@ dist/
 build/
 *.wav
 *.mp3
+# …except the bundled audio cues (1 s start/stop/done chimes).
+!voxtype/resources/sounds/*.wav
 
 # User data (settings, history, logs) — travels with the checkout but
 # never committed.

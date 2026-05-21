@@ -258,7 +258,10 @@ Quit VoxType
 Settings sections:
 
 - **Dictation** — hotkey mode, live **Rebind** button, auto-stop on
-  silence, VAD, append mode, save history
+  silence, VAD, append mode, save history, **Recording Sounds**
+  (enable + start/stop/done cues — bundled 1-second WAVs ship in
+  `voxtype/resources/sounds/`; Browse to override with any
+  wav/flac/ogg/mp3)
 - **Services** — three cards:
   - **OpenAI HTTP Server** — enable + port for the embedded server
   - **STT** — model field with auto-family detection, language,
