@@ -4,9 +4,9 @@ Run once to (re)bake the bundled audio cues. They're shipped in the
 repo so users never have to wait for runtime tone synthesis. Each
 file is a 22050 Hz, mono, 16-bit PCM WAV.
 
-  start.wav — ascending C-E-G arpeggio (records starts)
-  stop.wav  — descending G-E-C arpeggio (record ends)
-  done.wav  — two-note chime C6 + G5 (transcript pasted)
+  start.wav — bright "ting"  (high C6 bell, fast decay)
+  stop.wav  — mid    "tong"  (G5 bell, fast decay)
+  done.wav  — warm   "tung"  (E5 bell, slightly longer tail)
 """
 from __future__ import annotations
 
@@ -19,45 +19,41 @@ SR = 22050
 OUT = Path(__file__).resolve().parent.parent / "voxtype" / "resources" / "sounds"
 
 
-def _envelope(n: int, attack_ms: int = 8, release_ms: int = 60) -> np.ndarray:
-    """Linear attack + exponential-ish release. Avoids clicks while
-    keeping the tone bright on the attack."""
-    env = np.ones(n, dtype=np.float32)
-    a = max(1, int(SR * attack_ms / 1000))
-    r = max(1, int(SR * release_ms / 1000))
-    env[:a] = np.linspace(0.0, 1.0, a, dtype=np.float32)
-    # Exponential decay tail for a more chime-like feel
-    tail = np.exp(-np.linspace(0.0, 5.0, r, dtype=np.float32))
-    env[-r:] = np.minimum(env[-r:], tail)
-    return env
+def _bell(freq_hz: float, *,
+           dur_sec: float = 1.0,
+           amplitude: float = 0.55,
+           harmonics: tuple[float, ...] = (1.0, 0.55, 0.22, 0.08),
+           decay_tau: float = 0.22) -> np.ndarray:
+    """A single percussive bell tone: instant attack, exponential decay
+    over the full `dur_sec` so the WAV reads as exactly one second
+    even though most of the energy is in the first ~300 ms.
 
-
-def _tone(freq_hz: float, dur_sec: float, *,
-           amplitude: float = 0.45,
-           harmonics: tuple[float, ...] = (1.0, 0.35, 0.12),
-           release_ms: int = 80) -> np.ndarray:
-    """A note with harmonic richness, attack/release envelope."""
+    `decay_tau` (seconds) controls how fast the note dies away — small
+    values give a tight "ting", larger values give a longer "tung".
+    """
     n = int(SR * dur_sec)
     t = np.arange(n, dtype=np.float32) / SR
+
+    # Inharmonic partials produce bell-like character (each harmonic gets
+    # its own envelope so high harmonics die faster than the fundamental
+    # — exactly how real bells decay).
     wave_buf = np.zeros(n, dtype=np.float32)
     for k, gain in enumerate(harmonics, start=1):
-        wave_buf += gain * np.sin(2 * np.pi * (freq_hz * k) * t).astype(np.float32)
-    wave_buf /= max(harmonics)  # normalise so amplitude controls peak
-    wave_buf *= amplitude * _envelope(n, release_ms=release_ms)
+        partial_tau = decay_tau / (1 + 0.6 * (k - 1))
+        envelope_k = np.exp(-t / partial_tau)
+        wave_buf += gain * envelope_k * np.sin(
+            2 * np.pi * (freq_hz * k) * t,
+        ).astype(np.float32)
+
+    # Tiny attack ramp (3 ms) — prevents an audible click on the leading
+    # edge but keeps the percussive feel.
+    attack = max(1, int(SR * 0.003))
+    wave_buf[:attack] *= np.linspace(0.0, 1.0, attack, dtype=np.float32)
+
+    # Normalise to target amplitude (the harmonic stack can sum > 1).
+    peak = float(np.max(np.abs(wave_buf))) or 1.0
+    wave_buf *= amplitude / peak
     return wave_buf
-
-
-def _layout(notes: list[tuple[float, float]]) -> np.ndarray:
-    """Concatenate (freq, duration) notes into a single 1-second buffer
-    (or close to it — pad with silence to exactly 1 s)."""
-    parts = [_tone(f, d) for f, d in notes]
-    out = np.concatenate(parts)
-    target = SR  # 1 second
-    if len(out) < target:
-        out = np.concatenate([out, np.zeros(target - len(out), dtype=np.float32)])
-    else:
-        out = out[:target]
-    return out
 
 
 def _write_wav(path: Path, samples: np.ndarray) -> None:
@@ -70,24 +66,23 @@ def _write_wav(path: Path, samples: np.ndarray) -> None:
         w.writeframes(pcm16.tobytes())
 
 
-# Notes (just-intonation around C5 = 523.25 Hz so they sound musical)
-C5, E5, G5, C6 = 523.25, 659.25, 783.99, 1046.50
+# Single notes — bell-like, decay over ~1 s, no arpeggios.
+C6 = 1046.50  # high  → "ting"
+G5 =  783.99  # mid   → "tong"
+E5 =  659.25  # warm  → "tung"
 
-PRESETS: dict[str, list[tuple[float, float]]] = {
-    # Cheerful rising arpeggio — "we're listening"
-    "start": [(C5, 0.16), (E5, 0.16), (G5, 0.55)],
-    # Mirror — "we stopped listening"
-    "stop":  [(G5, 0.16), (E5, 0.16), (C5, 0.55)],
-    # Two-note ding — "all done"
-    "done":  [(C6, 0.22), (G5, 0.70)],
+PRESETS: dict[str, dict] = {
+    "start": {"freq_hz": C6, "decay_tau": 0.18},   # tight ting
+    "stop":  {"freq_hz": G5, "decay_tau": 0.22},   # mid tong
+    "done":  {"freq_hz": E5, "decay_tau": 0.32},   # longer tung
 }
 
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    for name, notes in PRESETS.items():
+    for name, kwargs in PRESETS.items():
         path = OUT / f"{name}.wav"
-        _write_wav(path, _layout(notes))
+        _write_wav(path, _bell(**kwargs))
         print(f"  wrote {path.relative_to(OUT.parent.parent.parent)}")
 
 
