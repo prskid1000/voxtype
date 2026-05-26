@@ -434,7 +434,7 @@ def _build_dictation(window) -> QWidget:
         "Audio cues for record / stop / done")
     
     cb_sounds = _checkbox("sounds_enabled", "Enabled")
-    slider_dur = _slider_log("sound_duration_sec", 0.01, 1000.0)
+    slider_dur = _slider_float("sound_duration_sec", 0.5, 1.0, 0.05)
     
     start_row = _sound_file_row("sound_start", "start", "sound_start_enabled")
     stop_row = _sound_file_row("sound_stop", "stop", "sound_stop_enabled")
