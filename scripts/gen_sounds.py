@@ -1,12 +1,9 @@
-"""Generate three 1-second cue WAV files into voxtype/resources/sounds/.
+"""Generate three snappy digital/mouse-click cue WAV files into voxtype/resources/sounds/.
 
-Run once to (re)bake the bundled audio cues. They're shipped in the
-repo so users never have to wait for runtime tone synthesis. Each
-file is a 22050 Hz, mono, 16-bit PCM WAV.
-
-  start.wav — bright "ting"  (high C6 bell, fast decay)
-  stop.wav  — mid    "tong"  (G5 bell, fast decay)
-  done.wav  — warm   "tung"  (E5 bell, slightly longer tail)
+Run once to (re)bake the bundled audio cues. Each file is a 22050 Hz, mono, 16-bit PCM WAV.
+- start.wav — snappy high digital click (1500 Hz, fast decay)
+- stop.wav  — snappy mid digital click (1000 Hz, fast decay)
+- done.wav  — premium double digital click (1800 Hz + 2200 Hz, 60ms delay)
 """
 from __future__ import annotations
 
@@ -19,41 +16,50 @@ SR = 22050
 OUT = Path(__file__).resolve().parent.parent / "voxtype" / "resources" / "sounds"
 
 
-def _bell(freq_hz: float, *,
-           dur_sec: float = 1.0,
-           amplitude: float = 0.55,
-           harmonics: tuple[float, ...] = (1.0, 0.55, 0.22, 0.08),
-           decay_tau: float = 0.22) -> np.ndarray:
-    """A single percussive bell tone: instant attack, exponential decay
-    over the full `dur_sec` so the WAV reads as exactly one second
-    even though most of the energy is in the first ~300 ms.
-
-    `decay_tau` (seconds) controls how fast the note dies away — small
-    values give a tight "ting", larger values give a longer "tung".
-    """
+def _digital_click(freq_hz: float, decay_tau: float, dur_sec: float = 1.0, amplitude: float = 0.5) -> np.ndarray:
+    """A single snappy digital click: instant attack, extremely fast exponential decay."""
     n = int(SR * dur_sec)
     t = np.arange(n, dtype=np.float32) / SR
 
-    # Inharmonic partials produce bell-like character (each harmonic gets
-    # its own envelope so high harmonics die faster than the fundamental
-    # — exactly how real bells decay).
-    wave_buf = np.zeros(n, dtype=np.float32)
-    for k, gain in enumerate(harmonics, start=1):
-        partial_tau = decay_tau / (1 + 0.6 * (k - 1))
-        envelope_k = np.exp(-t / partial_tau)
-        wave_buf += gain * envelope_k * np.sin(
-            2 * np.pi * (freq_hz * k) * t,
-        ).astype(np.float32)
+    # Fast exponential decay
+    envelope = np.exp(-t / decay_tau)
+    wave_buf = envelope * np.sin(2 * np.pi * freq_hz * t)
 
-    # Tiny attack ramp (3 ms) — prevents an audible click on the leading
-    # edge but keeps the percussive feel.
-    attack = max(1, int(SR * 0.003))
+    # Add a high-frequency snap transient at the very beginning (first 5ms)
+    transient_len = int(SR * 0.005)
+    if transient_len < n:
+        snap = np.sin(2 * np.pi * 3500.0 * t[:transient_len]) * np.exp(-t[:transient_len] / 0.0015)
+        wave_buf[:transient_len] += 0.4 * snap
+
+    # Snappy 1ms attack ramp to avoid harsh pop but keep the percussive attack
+    attack = max(1, int(SR * 0.001))
     wave_buf[:attack] *= np.linspace(0.0, 1.0, attack, dtype=np.float32)
 
-    # Normalise to target amplitude (the harmonic stack can sum > 1).
+    # Normalise
     peak = float(np.max(np.abs(wave_buf))) or 1.0
     wave_buf *= amplitude / peak
     return wave_buf
+
+
+def _double_click(freq1: float, freq2: float, delay_sec: float = 0.06, decay_tau: float = 0.012, dur_sec: float = 1.0, amplitude: float = 0.5) -> np.ndarray:
+    """Double digital click with a short delay in between to sound like a clean double-tap chime."""
+    n = int(SR * dur_sec)
+    samples = np.zeros(n, dtype=np.float32)
+
+    # First click
+    click1 = _digital_click(freq1, decay_tau, dur_sec=dur_sec, amplitude=amplitude)
+    samples += click1
+
+    # Second click
+    delay_samples = int(SR * delay_sec)
+    if delay_samples < n:
+        click2 = _digital_click(freq2, decay_tau, dur_sec=dur_sec - delay_sec, amplitude=amplitude)
+        samples[delay_samples:delay_samples + len(click2)] += click2
+
+    # Normalise
+    peak = float(np.max(np.abs(samples))) or 1.0
+    samples *= amplitude / peak
+    return samples
 
 
 def _write_wav(path: Path, samples: np.ndarray) -> None:
@@ -66,24 +72,23 @@ def _write_wav(path: Path, samples: np.ndarray) -> None:
         w.writeframes(pcm16.tobytes())
 
 
-# Single notes — bell-like, decay over ~1 s, no arpeggios.
-C6 = 1046.50  # high  → "ting"
-G5 =  783.99  # mid   → "tong"
-E5 =  659.25  # warm  → "tung"
-
-PRESETS: dict[str, dict] = {
-    "start": {"freq_hz": C6, "decay_tau": 0.18},   # tight ting
-    "stop":  {"freq_hz": G5, "decay_tau": 0.22},   # mid tong
-    "done":  {"freq_hz": E5, "decay_tau": 0.32},   # longer tung
-}
-
-
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    for name, kwargs in PRESETS.items():
-        path = OUT / f"{name}.wav"
-        _write_wav(path, _bell(**kwargs))
-        print(f"  wrote {path.relative_to(OUT.parent.parent.parent)}")
+
+    # 1. Start: Snappy digital high click
+    start_samples = _digital_click(1500.0, decay_tau=0.012)
+    _write_wav(OUT / "start.wav", start_samples)
+    print(f"  wrote {OUT / 'start.wav'}")
+
+    # 2. Stop: Snappy digital mid click
+    stop_samples = _digital_click(1000.0, decay_tau=0.015)
+    _write_wav(OUT / "stop.wav", stop_samples)
+    print(f"  wrote {OUT / 'stop.wav'}")
+
+    # 3. Done: Snappy double digital click
+    done_samples = _double_click(1800.0, 2200.0, delay_sec=0.06, decay_tau=0.012)
+    _write_wav(OUT / "done.wav", done_samples)
+    print(f"  wrote {OUT / 'done.wav'}")
 
 
 if __name__ == "__main__":

@@ -182,7 +182,7 @@ class Orchestrator(QObject):
             return
         self._recording_since = time.monotonic()
         self._set_pill("recording", "")
-        if s.sounds_enabled:
+        if s.sounds_enabled and getattr(s, "sound_start_enabled", True):
             sounds.play("start", s.sound_start)
 
     def _on_auto_silence(self) -> None:
@@ -217,7 +217,7 @@ class Orchestrator(QObject):
             self._flash_error("No speech detected")
             return
 
-        if s.sounds_enabled:
+        if s.sounds_enabled and getattr(s, "sound_stop_enabled", True):
             sounds.play("stop", s.sound_stop)
         self._set_pill("processing", "")
         self._pipeline_future = self._loop.submit(self._pipeline(pcm, s))
@@ -309,7 +309,7 @@ class Orchestrator(QObject):
 
         # Brief pause so the pill's "typing" tick is visible
         await asyncio.sleep(0.4)
-        if s.sounds_enabled:
+        if s.sounds_enabled and getattr(s, "sound_done_enabled", True):
             sounds.play("done", s.sound_done)
         self.pill_state_req.emit("idle", "")
 

@@ -163,6 +163,82 @@ def _slider_float(path: str, lo: float, hi: float, step: float = 0.1,
     return w
 
 
+def _slider_log(path: str, lo: float, hi: float, steps: int = 500) -> QWidget:
+    """Logarithmic horizontal slider + live readout, persisted to `path`.
+
+    `lo` and `hi` are the actual values in seconds (e.g. 0.01 and 1000.0).
+    The slider position ranges from 0 to `steps` linearly, which is mapped
+    logarithmically to [lo, hi].
+    """
+    import math
+    from PySide6.QtWidgets import QSlider
+    s = config.load()
+    cur = float(getattr(s, path, lo))
+
+    # Ensure cur is within bounds
+    cur = max(lo, min(hi, cur))
+
+    log_lo = math.log10(lo)
+    log_hi = math.log10(hi)
+
+    w = QWidget()
+    l = QHBoxLayout(w); l.setContentsMargins(0, 0, 0, 0); l.setSpacing(10)
+    slider = QSlider(Qt.Orientation.Horizontal)
+    slider.setRange(0, steps)
+    slider.setSingleStep(1)
+
+    # Calculate initial slider value from cur
+    if cur > 0:
+        log_cur = math.log10(cur)
+        val_idx = int(round((log_cur - log_lo) / (log_hi - log_lo) * steps))
+        slider.setValue(max(0, min(steps, val_idx)))
+    else:
+        slider.setValue(0)
+
+    readout = QLabel()
+    readout.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; min-width: 60px;")
+
+    def format_val(val: float) -> str:
+        if val < 1.0:
+            ms = int(round(val * 1000))
+            if ms < 10:
+                ms = 10
+            return f"{ms} ms"
+        elif val < 10.0:
+            return f"{val:.2f} s"
+        elif val < 100.0:
+            return f"{val:.1f} s"
+        else:
+            return f"{int(round(val))} s"
+
+    readout.setText(format_val(cur))
+
+    def _on(i: int) -> None:
+        log_val = log_lo + (i / steps) * (log_hi - log_lo)
+        val = 10 ** log_val
+        # Round the value to be nice
+        if val < 0.1:
+            val = round(val * 200) / 200  # 5ms steps
+            val = max(lo, min(hi, val))
+        elif val < 1.0:
+            val = round(val * 100) / 100  # 10ms steps
+        elif val < 10.0:
+            val = round(val * 20) / 20    # 50ms steps
+        elif val < 100.0:
+            val = round(val * 2) / 2      # 0.5s steps
+        else:
+            val = round(val / 10) * 10    # 10s steps
+            val = max(lo, min(hi, val))
+
+        readout.setText(format_val(val))
+        config.patch(path, val)
+
+    slider.valueChanged.connect(_on)
+    l.addWidget(slider, 1)
+    l.addWidget(readout)
+    return w
+
+
 def _spin_idle(path: str, default_sec: int = 300) -> QWidget:
     """Auto-unload composite: [Enabled] + [N s spinbox].
 
@@ -328,14 +404,19 @@ def _build_dictation(window) -> QWidget:
         "Click Rebind, then press the new 1–2 key combo. Colons, dots "
         "and spaces are not allowed in key names."), hk_row))
 
+    cb_silence = _checkbox("auto_stop_on_silence", "Enabled")
+    slider_silence = _slider_float("silence_duration_sec", 0.5, 5.0, 0.1)
+    slider_silence.setEnabled(cb_silence.isChecked())
+    cb_silence.toggled.connect(slider_silence.setEnabled)
+
     body.addWidget(_row(_label("Auto-Stop On Silence",
         "In hold-mode, stop recording if the mic stays quiet for a few seconds."),
-        _checkbox("auto_stop_on_silence", "Enabled")))
+        cb_silence))
     body.addWidget(_row(_label("Silence Duration",
         "How many seconds of continuous quiet before auto-stop fires. "
         "The timer only starts after VoxType has heard at least one speech "
         "frame — a silent mic won't insta-stop."),
-        _slider_float("silence_duration_sec", 0.5, 5.0, 0.1)))
+        slider_silence))
     body.addWidget(_row(_label("VAD",
         "Skip empty recordings — don't call STT if the buffer is pure silence."),
         _checkbox("vad_enabled", "Enabled")))
@@ -351,34 +432,59 @@ def _build_dictation(window) -> QWidget:
     # ── Recording Sounds card ──────────────────────────────────────
     sound_card, sound_body = _card("Recording Sounds",
         "Audio cues for record / stop / done")
+    
+    cb_sounds = _checkbox("sounds_enabled", "Enabled")
+    slider_dur = _slider_log("sound_duration_sec", 0.01, 1000.0)
+    
+    start_row = _sound_file_row("sound_start", "start", "sound_start_enabled")
+    stop_row = _sound_file_row("sound_stop", "stop", "sound_stop_enabled")
+    done_row = _sound_file_row("sound_done", "done", "sound_done_enabled")
+    
+    # Dynamic linkage
+    def _link_sounds(enabled: bool) -> None:
+        slider_dur.setEnabled(enabled)
+        start_row.update_master(enabled)
+        stop_row.update_master(enabled)
+        done_row.update_master(enabled)
+        
+    cb_sounds.toggled.connect(_link_sounds)
+    _link_sounds(cb_sounds.isChecked())
+    
     sound_body.addWidget(_row(_label("Sounds",
         "Play short audio cues on record start, record stop, and "
         "transcript-typed."),
-        _checkbox("sounds_enabled", "Enabled")))
+        cb_sounds))
+    sound_body.addWidget(_row(_label("Sound Duration",
+        "How long to play the audio cues. Supports range from 10 ms to 1000 s."),
+        slider_dur))
     sound_body.addWidget(_row(_label("Start Recording",
         "Played when the hotkey is pressed. Empty = built-in tone."),
-        _sound_file_row("sound_start", "start")))
+        start_row))
     sound_body.addWidget(_row(_label("Stop Recording",
         "Played when the hotkey is released (or silence auto-stop fires)."),
-        _sound_file_row("sound_stop", "stop")))
+        stop_row))
     sound_body.addWidget(_row(_label("Processing Complete",
         "Played after the cleaned transcript has been pasted."),
-        _sound_file_row("sound_done", "done")))
+        done_row))
     layout.addWidget(sound_card)
     layout.addStretch(1)
     return scroll
 
 
-def _sound_file_row(path_field: str, cue: str) -> QWidget:
-    """[text field] [Browse…] [Test] [Reset]. Empty path → built-in tone."""
+def _sound_file_row(path_field: str, cue: str, enabled_field: str) -> QWidget:
+    """[Checkbox] [text field] [Browse…] [Test] [Reset]."""
     from PySide6.QtWidgets import QFileDialog
     from voxtype import sounds
 
     w = QWidget()
     h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
 
+    cb = QCheckBox("Enabled")
+    s = config.load()
+    cb.setChecked(bool(getattr(s, enabled_field, True)))
+
     le = QLineEdit()
-    le.setText(str(getattr(config.load(), path_field, "") or ""))
+    le.setText(str(getattr(s, path_field, "") or ""))
     le.setPlaceholderText("(built-in tone)")
     le.editingFinished.connect(lambda: config.patch(path_field, le.text()))
 
@@ -388,6 +494,25 @@ def _sound_file_row(path_field: str, cue: str) -> QWidget:
     test.setFixedWidth(56)
     reset = QPushButton("Reset"); reset.setProperty("class", "ghost")
     reset.setFixedWidth(60)
+
+    # Master enabled state property
+    w.setProperty("master_enabled", True)
+
+    def _sync():
+        master_ok = bool(w.property("master_enabled"))
+        row_ok = cb.isChecked()
+        cb.setEnabled(master_ok)
+        active = master_ok and row_ok
+        le.setEnabled(active)
+        browse.setEnabled(active)
+        test.setEnabled(active)
+        reset.setEnabled(active)
+
+    def _on_cb_toggled(checked: bool) -> None:
+        config.patch(enabled_field, checked)
+        _sync()
+
+    cb.toggled.connect(_on_cb_toggled)
 
     def _on_browse() -> None:
         fn, _ = QFileDialog.getOpenFileName(
@@ -399,7 +524,7 @@ def _sound_file_row(path_field: str, cue: str) -> QWidget:
             config.patch(path_field, fn)
 
     def _on_test() -> None:
-        sounds.play(cue, le.text().strip())  # type: ignore[arg-type]
+        sounds.play(cue, le.text().strip())
 
     def _on_reset() -> None:
         le.setText("")
@@ -409,10 +534,21 @@ def _sound_file_row(path_field: str, cue: str) -> QWidget:
     test.clicked.connect(_on_test)
     reset.clicked.connect(_on_reset)
 
+    h.addWidget(cb)
     h.addWidget(le, 1)
     h.addWidget(browse)
     h.addWidget(test)
     h.addWidget(reset)
+
+    # Expose custom update function
+    def update_master(enabled: bool) -> None:
+        w.setProperty("master_enabled", enabled)
+        _sync()
+
+    w.update_master = update_master  # type: ignore[attr-defined]
+
+    # Run initial sync
+    _sync()
     return w
 
 

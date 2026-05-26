@@ -17,6 +17,20 @@ class ConfigPatch(unittest.TestCase):
         config.patch("stt_model_path", "openai/whisper-tiny")
         self.assertEqual(config.load().stt_model_path, "openai/whisper-tiny")
 
+    def test_sound_duration_sec_patch(self):
+        from voxtype import config
+        config.patch("sound_duration_sec", 0.25)
+        self.assertEqual(config.load().sound_duration_sec, 0.25)
+
+    def test_individual_sound_toggles(self):
+        from voxtype import config
+        config.patch("sound_start_enabled", False)
+        config.patch("sound_stop_enabled", False)
+        config.patch("sound_done_enabled", False)
+        self.assertFalse(config.load().sound_start_enabled)
+        self.assertFalse(config.load().sound_stop_enabled)
+        self.assertFalse(config.load().sound_done_enabled)
+
     def test_stt_opts_dotted_write(self):
         from voxtype import config
         config.patch("stt_opts.task", "translate")

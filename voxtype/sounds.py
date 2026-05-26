@@ -46,12 +46,16 @@ def _play_wav_winsound(path: Path) -> bool:
         return False
 
 
-def _play_via_sounddevice(path: Path) -> None:
-    """Fallback for non-WAV custom paths (mp3/ogg/flac via libsndfile)."""
+def _play_via_sounddevice(path: Path, max_duration_sec: float | None = None) -> None:
+    """Fallback/default for playback, optionally truncated to max_duration_sec."""
     try:
         import sounddevice as sd
         import soundfile as sf
         data, sr = sf.read(str(path), dtype="float32", always_2d=False)
+        if max_duration_sec is not None and max_duration_sec > 0:
+            num_samples = int(max_duration_sec * sr)
+            if num_samples < len(data):
+                data = data[:num_samples]
         sd.play(data, sr, blocking=True)
     except Exception as exc:
         log.warning("sounddevice playback failed for %s: %s", path, exc)
@@ -59,8 +63,12 @@ def _play_via_sounddevice(path: Path) -> None:
 
 def play(cue: Cue, custom_path: str = "") -> None:
     """Play a built-in cue or a user-provided audio file. Returns
-    immediately — playback runs on a daemon thread."""
+    immediately — playback runs on a daemon thread with configured duration."""
     def _do() -> None:
+        from voxtype import config
+        s = config.load()
+        dur = float(getattr(s, "sound_duration_sec", 0.15))
+
         # Resolve which file to play.
         target: Path | None = None
         if custom_path:
@@ -76,11 +84,7 @@ def play(cue: Cue, custom_path: str = "") -> None:
                              "run `python scripts/gen_sounds.py`", target)
                 return
 
-        # Prefer winsound for .wav (Windows-native, super reliable).
-        if target.suffix.lower() == ".wav":
-            if _play_wav_winsound(target):
-                return
-        # Fallback path for non-WAV (or if winsound failed somehow).
-        _play_via_sounddevice(target)
+        # Play via sounddevice to support precise duration truncation.
+        _play_via_sounddevice(target, max_duration_sec=dur)
 
     threading.Thread(target=_do, daemon=True, name=f"voxtype-cue-{cue}").start()
