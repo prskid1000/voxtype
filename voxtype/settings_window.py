@@ -839,6 +839,161 @@ def _server_status() -> tuple[str, str]:
     return ("running", "ok") if server.is_running() else ("stopped", "idle")
 
 
+# ── Live-state tile (telecode-style) ─────────────────────────────────
+
+def _make_progress_bar(ratio: float, label: str) -> QWidget:
+    """Thin horizontal progress bar with a caption above it. `ratio` in
+    [0, 1]. Mirrors telecode's status-tile progress viz."""
+    from voxtype.qt_theme import WARN, BG_ELEV
+    ratio = max(0.0, min(1.0, ratio))
+    w = QWidget()
+    v = QVBoxLayout(w)
+    v.setContentsMargins(0, 0, 0, 0); v.setSpacing(3)
+    if label:
+        cap = QLabel(label)
+        cap.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px;")
+        v.addWidget(cap)
+    track = QFrame()
+    track.setFixedHeight(4)
+    track.setStyleSheet(f"background: {BG_ELEV}; border-radius: 2px;")
+    fh = QHBoxLayout(track)
+    fh.setContentsMargins(0, 0, 0, 0); fh.setSpacing(0)
+    fill = QFrame()
+    fill.setStyleSheet(f"background: {WARN}; border-radius: 2px;")
+    pct = int(round(ratio * 100))
+    fh.addWidget(fill, max(1, pct))
+    fh.addStretch(max(1, 100 - pct))
+    v.addWidget(track)
+    return w
+
+
+def _live_state_tile(name: str) -> QWidget:
+    """Telecode-style 'Live state' tile for an engine card.
+
+    Shows the model's running state as a big value, the detected family
+    as sub-text, and — while loaded with auto-unload enabled — a
+    countdown progress bar ('Auto-unload in Ns'). Polled once a second
+    off a QTimer parented to the tile, so it survives load/unload."""
+    from voxtype.qt_theme import OK, ERR, WARN, FG, BG_ELEV
+
+    tile = QFrame()
+    tile.setObjectName("liveTile")
+
+    root = QHBoxLayout(tile)
+    root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
+
+    bar = QFrame()
+    bar.setFixedWidth(4)
+    root.addWidget(bar)
+
+    body_w = QWidget()
+    body = QVBoxLayout(body_w)
+    body.setContentsMargins(14, 12, 16, 12); body.setSpacing(5)
+    root.addWidget(body_w, 1)
+
+    hdr = QHBoxLayout(); hdr.setContentsMargins(0, 0, 0, 0); hdr.setSpacing(0)
+    title = QLabel("LIVE STATE")
+    title.setStyleSheet(f"color: {FG_MUTE}; font-size: 10px; "
+                         f"letter-spacing: 1.5px; font-weight: 500;")
+    dot = QLabel("●")
+    hdr.addWidget(title); hdr.addStretch(1); hdr.addWidget(dot)
+    body.addLayout(hdr)
+
+    value = QLabel("—")
+    value.setStyleSheet(f"color: {FG}; font-size: 20px; font-weight: 600;")
+    body.addWidget(value)
+
+    sub = QLabel("")
+    sub.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+    sub.setWordWrap(True)
+    body.addWidget(sub)
+
+    viz_host = QWidget()
+    viz_layout = QVBoxLayout(viz_host)
+    viz_layout.setContentsMargins(0, 2, 0, 0); viz_layout.setSpacing(0)
+    body.addWidget(viz_host)
+
+    _COLOR = {"ok": OK, "busy": WARN, "err": ERR, "idle": FG_MUTE, "off": FG_MUTE}
+
+    def _set_state(kind: str) -> None:
+        c = _COLOR.get(kind, FG_MUTE)
+        bar.setStyleSheet(f"background: {c}; border-top-left-radius: 8px; "
+                          f"border-bottom-left-radius: 8px;")
+        dot.setStyleSheet(f"color: {c}; font-size: 9px;")
+        border = {
+            "ok":   "rgba(86, 224, 194, 0.55)",
+            "busy": "rgba(245, 165, 36, 0.50)",
+            "err":  "rgba(255, 110, 110, 0.50)",
+        }.get(kind, BORDER)
+        tile.setStyleSheet(
+            f"#liveTile {{ background: {BG_ELEV}; border: 1px solid {border}; "
+            f"border-radius: 8px; }}")
+
+    def _set_viz(widget: QWidget | None) -> None:
+        while viz_layout.count():
+            it = viz_layout.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None); w.deleteLater()
+        if widget is not None:
+            viz_layout.addWidget(widget)
+
+    def _refresh() -> None:
+        s_cfg = config.load()
+        if not bool(getattr(s_cfg, f"{name}_enabled", False)):
+            _set_state("off"); value.setText("Disabled"); sub.setText("")
+            _set_viz(None); return
+        # Read straight from the engine — its EngineStatus carries the
+        # detected `family`, which process.get_status() drops. Fetch once
+        # so status and the idle countdown stay consistent.
+        eng = _engine_for_ui(name)
+        try:
+            st = eng.get_status()
+        except Exception:
+            st = None
+        if st is None:
+            _set_state("idle"); value.setText("Unloaded")
+            sub.setText("Loads on first hotkey press"); _set_viz(None); return
+        if st.last_error and not st.ready and not st.running:
+            _set_state("err"); value.setText("Error")
+            sub.setText(str(st.last_error)[:80]); _set_viz(None); return
+        if st.ready:
+            _set_state("ok"); value.setText("Ready")
+            fam = getattr(st, "family", "") or ""
+            sub.setText(f"{fam} loaded" if fam else "Model loaded")
+            limit, rem = eng.idle_info()
+            if limit > 0 and rem >= 0:
+                _set_viz(_make_progress_bar(
+                    rem / limit if limit else 0.0,
+                    f"Auto-unload in {int(rem)}s"))
+            else:
+                _set_viz(None)
+            return
+        if st.running:
+            _set_state("busy"); value.setText("Loading…")
+            sub.setText("Downloading / initialising model"); _set_viz(None); return
+        _set_state("idle"); value.setText("Unloaded")
+        sub.setText("Loads on first hotkey press"); _set_viz(None)
+
+    _set_state("idle")
+    _refresh()
+    timer = QTimer(tile)
+    timer.setInterval(1000)
+    timer.timeout.connect(_refresh)
+    timer.start()
+    return tile
+
+
+def _engine_for_ui(name: str):
+    """The live STT/TTS engine singleton — its get_status()/idle_info()
+    expose `family` and the auto-unload countdown the tile needs."""
+    if name == "stt":
+        from voxtype.stt_engine import get_engine
+    else:
+        from voxtype.tts_engine import get_engine
+    return get_engine()
+
+
 # ── Spec-driven widget renderer ──────────────────────────────────────
 
 
@@ -1065,6 +1220,7 @@ def _build_stt_card(window) -> QWidget:
         _checkbox("stt_torch_compile", "Enabled"))
     body.addWidget(compile_row); state["compile_row"] = compile_row
 
+    body.addWidget(_live_state_tile("stt"))
     body.addWidget(_lifecycle_row(
         "Load", "Unload", "Reload",
         on_load=lambda: window.start_service("stt"),
@@ -1272,6 +1428,7 @@ def _build_tts_card(window) -> QWidget:
         _checkbox("tts_torch_compile", "Enabled"))
     body.addWidget(compile_row); state["compile_row"] = compile_row
 
+    body.addWidget(_live_state_tile("tts"))
     body.addWidget(_lifecycle_row(
         "Load", "Unload", "Reload",
         on_load=lambda: window.start_service("tts"),

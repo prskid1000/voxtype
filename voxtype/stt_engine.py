@@ -68,6 +68,7 @@ class STTEngine:
         self._last_used = 0.0
         self._idle_unload_sec = 0
         self._idle_watch_started = False
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         self._model_path = ""
         self._device = "cpu"
@@ -100,6 +101,17 @@ class STTEngine:
 
     def get_backend(self) -> STTBackend | None:
         return self._backend
+
+    def idle_info(self) -> tuple[int, float]:
+        """Live auto-unload telemetry for the UI.
+
+        Returns (idle_unload_sec, remaining_sec). remaining_sec is -1
+        when the model isn't loaded or auto-unload is disabled; otherwise
+        the seconds left before the idle watcher unloads."""
+        if self._backend is None or self._idle_unload_sec <= 0:
+            return (self._idle_unload_sec, -1.0)
+        idle = time.monotonic() - (self._last_used or 0.0)
+        return (self._idle_unload_sec, max(0.0, self._idle_unload_sec - idle))
 
     def _notify(self) -> None:
         for fn in list(self._listeners):
@@ -152,6 +164,7 @@ class STTEngine:
 
     async def _do_load_locked(self) -> None:
         model_id = self._effective_model()
+        self._loop = asyncio.get_running_loop()
         backend = get_stt_backend()
         log.info("stt loading model=%s device=%s", model_id, self._device)
         self._status.last_error = ""
@@ -246,7 +259,7 @@ class STTEngine:
         self._idle_watch_started = True
 
         def _loop_thread() -> None:
-            INTERVAL = 30.0
+            INTERVAL = 2.0
             while True:
                 time.sleep(INTERVAL)
                 if self._backend is None:
@@ -258,10 +271,30 @@ class STTEngine:
                     continue
                 log.info("stt idle for %.0fs ≥ %ds — unloading",
                          idle, self._idle_unload_sec)
-                threading.Thread(
-                    target=lambda: asyncio.run(self.unload()),
-                    daemon=True,
-                ).start()
+                self._request_unload()
+
+        threading.Thread(target=_loop_thread, daemon=True,
+                         name="voxtype-stt-idle").start()
+
+    def _request_unload(self) -> None:
+        """Schedule unload() on the worker loop the model was loaded on.
+
+        The idle watcher runs on its own thread; `unload()` acquires an
+        asyncio.Lock bound to the worker loop, so it MUST run there.
+        Using asyncio.run() would spin up a fresh loop and raise
+        'bound to a different event loop' — which is why auto-unload
+        silently never fired before."""
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(self.unload(), loop)
+                return
+            except Exception as exc:  # noqa: BLE001
+                log.debug("stt idle-unload schedule failed: %s", exc)
+        # Fallback: no live worker loop (shouldn't happen in-app).
+        threading.Thread(
+            target=lambda: asyncio.run(self.unload()), daemon=True,
+        ).start()
 
         threading.Thread(target=_loop_thread, daemon=True,
                          name="voxtype-stt-idle").start()

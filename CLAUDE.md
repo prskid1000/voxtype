@@ -68,6 +68,16 @@ Pipeline state machine (PillState):
 `idle → recording → processing → [enhancing →] typing → idle`. On
 failure → `error` for 2 s → `idle`.
 
+**Idle auto-unload.** Each engine runs a daemon watcher thread that
+polls `_last_used` every 2 s and unloads after `*_idle_unload_sec` of
+inactivity. The watcher MUST schedule `unload()` back onto the worker
+loop via `_request_unload()` (`run_coroutine_threadsafe` on the
+captured `self._loop`) — `unload()` acquires an `asyncio.Lock` bound to
+that loop, so calling `asyncio.run(unload())` from the watcher thread
+raises "bound to a different event loop" and the unload silently never
+fires. `engine.idle_info()` → `(idle_unload_sec, remaining_sec)` feeds
+the settings cards' "Live state" tile countdown (`_live_state_tile`).
+
 ## Generic backend dispatcher
 
 `backends/generic_stt.py` and `backends/generic_tts.py` are the only
