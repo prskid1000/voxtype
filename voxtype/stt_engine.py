@@ -16,7 +16,7 @@ import asyncio
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -216,7 +216,10 @@ class STTEngine:
         self._status.ready = False
         self._notify()
         try:
-            be.unload_sync()
+            # Free weights off the event loop — GPU teardown can be slow
+            # and must not stall the worker loop (or shutdown).
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(self._exec, be.unload_sync)
         except Exception as exc:  # noqa: BLE001
             log.debug("stt unload exc (%s)", exc)
 
@@ -262,39 +265,47 @@ class STTEngine:
             INTERVAL = 2.0
             while True:
                 time.sleep(INTERVAL)
-                if self._backend is None:
-                    continue
-                if self._idle_unload_sec <= 0:
-                    continue
-                idle = time.monotonic() - (self._last_used or 0.0)
-                if idle < self._idle_unload_sec:
-                    continue
-                log.info("stt idle for %.0fs ≥ %ds — unloading",
-                         idle, self._idle_unload_sec)
-                self._request_unload()
+                try:
+                    if self._backend is None:
+                        continue
+                    if self._idle_unload_sec <= 0:
+                        continue
+                    idle = time.monotonic() - (self._last_used or 0.0)
+                    if idle < self._idle_unload_sec:
+                        continue
+                    log.info("stt idle for %.0fs ≥ %ds — unloading",
+                             idle, self._idle_unload_sec)
+                    self._request_unload()
+                except Exception as exc:  # noqa: BLE001 — never let the watcher die
+                    log.error("stt idle watcher iteration failed: %s", exc)
 
         threading.Thread(target=_loop_thread, daemon=True,
                          name="voxtype-stt-idle").start()
 
     def _request_unload(self) -> None:
-        """Schedule unload() on the worker loop the model was loaded on.
+        """Run unload() on the worker loop the model was loaded on, and
+        BLOCK this (watcher) thread until it finishes.
 
-        The idle watcher runs on its own thread; `unload()` acquires an
-        asyncio.Lock bound to the worker loop, so it MUST run there.
-        Using asyncio.run() would spin up a fresh loop and raise
-        'bound to a different event loop' — which is why auto-unload
-        silently never fired before."""
+        `unload()` acquires an asyncio.Lock bound to the worker loop, so
+        it must run there — asyncio.run() would spin up a fresh loop and
+        raise 'bound to a different event loop'. We wait on the Future so
+        the watcher only re-fires after the unload actually settles
+        (instead of queuing a new unload every 2 s) and so failures or
+        stalls are logged instead of vanishing."""
         loop = self._loop
-        if loop is not None and loop.is_running():
-            try:
-                asyncio.run_coroutine_threadsafe(self.unload(), loop)
-                return
-            except Exception as exc:  # noqa: BLE001
-                log.debug("stt idle-unload schedule failed: %s", exc)
-        # Fallback: no live worker loop (shouldn't happen in-app).
-        threading.Thread(
-            target=lambda: asyncio.run(self.unload()), daemon=True,
-        ).start()
+        if loop is None or not loop.is_running():
+            log.warning("stt idle-unload: worker loop unavailable "
+                        "(loop=%r) — skipping", loop)
+            return
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self.unload(), loop)
+            fut.result(timeout=60)
+            log.info("stt idle-unload complete")
+        except FuturesTimeout:
+            log.error("stt idle-unload timed out — worker loop busy; "
+                      "will retry")
+        except Exception as exc:  # noqa: BLE001
+            log.error("stt idle-unload failed: %s", exc)
 
         threading.Thread(target=_loop_thread, daemon=True,
                          name="voxtype-stt-idle").start()

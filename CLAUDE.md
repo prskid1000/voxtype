@@ -70,13 +70,21 @@ failure → `error` for 2 s → `idle`.
 
 **Idle auto-unload.** Each engine runs a daemon watcher thread that
 polls `_last_used` every 2 s and unloads after `*_idle_unload_sec` of
-inactivity. The watcher MUST schedule `unload()` back onto the worker
-loop via `_request_unload()` (`run_coroutine_threadsafe` on the
-captured `self._loop`) — `unload()` acquires an `asyncio.Lock` bound to
-that loop, so calling `asyncio.run(unload())` from the watcher thread
-raises "bound to a different event loop" and the unload silently never
-fires. `engine.idle_info()` → `(idle_unload_sec, remaining_sec)` feeds
-the settings cards' "Live state" tile countdown (`_live_state_tile`).
+inactivity. `_request_unload()` runs `unload()` on the captured worker
+loop (`self._loop`) via `run_coroutine_threadsafe` and **blocks the
+watcher thread on the Future** (`fut.result(timeout=60)`): `unload()`
+acquires an `asyncio.Lock` bound to that loop so it must run there
+(`asyncio.run()` would raise "bound to a different event loop"), and
+waiting means the watcher re-fires only after the unload settles
+(no per-2 s re-queue) and logs `complete` / `timed out — worker loop
+busy`. The watcher body is wrapped so an exception can't kill it.
+`_do_unload_locked` frees weights via `run_in_executor` so GPU teardown
+never stalls the loop or shutdown. NOTE: if the worker loop is itself
+blocked by a long synchronous torch/CUDA call (e.g. `torch.compile`
+first-inference compile holding the GIL), the scheduled unload waits
+for the loop to free — the timeout log surfaces this.
+`engine.idle_info()` → `(idle_unload_sec, remaining_sec)` feeds the
+settings cards' "Live state" tile countdown (`_live_state_tile`).
 
 ## Generic backend dispatcher
 
