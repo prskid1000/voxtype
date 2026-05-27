@@ -101,7 +101,13 @@ resurrects an idle-exited worker. The worker is bound to the
 kill-on-close Job Object (`process.bind_to_lifetime_job`) so it dies
 with the GUI; `process.stop_all()` also calls `engine_host.stop()`.
 `engine.idle_info()` reports stage-1's `(idle_unload_sec, remaining)`
-(from the cached status) for the "Live state" tile countdown.
+(from the cached status) for the "Live state" tile. The tile shows both
+stages (mirroring telecode's docgraph tile): **Ready** + `Auto-unload in
+Ns` bar (stage 1, weights) → **Warm** + `Release GPU in Ms` bar (stage 2;
+worker alive, context cached, from the status `exit_remaining`) →
+**Idle** "GPU fully released" (worker exited). Because the worker is
+shared, a card shows "Warm" with no release bar while the OTHER modality
+is still loaded (the context can't free until both unload).
 
 **Log messages must stay ASCII-safe.** `debug_log` reconfigures the
 stderr handler with `errors="backslashreplace"` because the Windows

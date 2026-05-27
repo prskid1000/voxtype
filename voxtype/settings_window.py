@@ -1006,8 +1006,26 @@ def _live_state_tile(name: str) -> QWidget:
         if st.running:
             _set_state("busy"); value.setText("Loading…")
             sub.setText("Downloading / initialising model"); _set_viz(None); return
-        _set_state("idle"); value.setText("Unloaded")
-        sub.setText("Loads on first hotkey press"); _set_viz(None)
+        # Not loaded. Two-stage detail (mirrors telecode's docgraph tile):
+        # stage 1 = weights (above, "Ready" + auto-unload bar); stage 2 =
+        # the worker process / CUDA context. "Warm" = worker still alive
+        # with weights freed (context cached, fast reload); "Idle" = worker
+        # exited, context fully released.
+        from voxtype.engine_host import get_host
+        snap = get_host().cached_status()
+        if snap.get("alive") and not snap.get("down"):
+            _set_state("idle"); value.setText("Warm")
+            sub.setText("Weights freed · GPU context cached")
+            exit_rem = float(snap.get("exit_remaining", -1.0))
+            exit_lim = float(snap.get("idle_exit_sec", 0) or 0)
+            if exit_rem >= 0 and exit_lim > 0:
+                _set_viz(_make_progress_bar(exit_rem / exit_lim,
+                                            f"Release GPU in {int(exit_rem)}s"))
+            else:
+                _set_viz(None)
+            return
+        _set_state("idle"); value.setText("Idle")
+        sub.setText("GPU fully released · loads on first use"); _set_viz(None)
 
     _set_state("idle")
     _refresh()

@@ -203,8 +203,16 @@ class _Host:
                 "sample_rate": m.sample_rate(), "error": m.last_error,
                 "idle_unload_sec": m.idle_unload_sec, "remaining": rem,
             }
-        return {"ok": True, "stt": one(self.stt), "tts": one(self.tts),
-                "idle_exit_sec": self.idle_exit_sec, "pid": _pid()}
+        # Stage-2 (process exit -> CUDA context release) countdown: only
+        # meaningful once BOTH models are unloaded.
+        exit_rem = -1.0
+        if (self.idle_exit_sec > 0 and not self.stt.is_loaded()
+                and not self.tts.is_loaded()):
+            exit_rem = max(0.0, self.idle_exit_sec
+                           - (time.monotonic() - self.last_activity))
+        return {"ok": True, "alive": True, "stt": one(self.stt),
+                "tts": one(self.tts), "idle_exit_sec": self.idle_exit_sec,
+                "exit_remaining": exit_rem, "pid": _pid()}
 
     def idle_monitor(self) -> None:
         """Two-stage idle: unload each model after its own idle_unload_sec;
