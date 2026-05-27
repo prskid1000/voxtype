@@ -18,19 +18,25 @@ class FakeBackend:
         return self._specs
 
 
+def _model(backend, language, opts):
+    """Build a worker _Model with a fixed backend + cfg."""
+    from voxtype.engine_worker import _Model
+    m = _Model("stt")
+    m.backend = backend
+    m.cfg = {"language": language, "opts": opts}
+    return m
+
+
 class STTOptsFilter(unittest.TestCase):
     def test_filters_to_allowed_keys(self):
-        from voxtype.stt_engine import STTEngine
-        eng = STTEngine()
-        eng._backend = FakeBackend(["task", "num_beams"])
-        eng._language = "en"
-        eng._opts = {
+        from voxtype.engine_worker import _stt_opts
+        m = _model(FakeBackend(["task", "num_beams"]), "en", {
             "task": "translate",
             "num_beams": 5,
             "initial_prompt": "stale value",
             "temperature": 0.7,  # belongs to a different family
-        }
-        opts = eng._build_opts(None)
+        })
+        opts = _stt_opts(m, None)
         # `language` is always passed through (universal field).
         self.assertEqual(opts["language"], "en")
         self.assertEqual(opts["task"], "translate")
@@ -40,19 +46,15 @@ class STTOptsFilter(unittest.TestCase):
         self.assertNotIn("temperature", opts)
 
     def test_no_backend_yields_just_language(self):
-        from voxtype.stt_engine import STTEngine
-        eng = STTEngine()
-        eng._backend = None
-        eng._language = "es"
-        opts = eng._build_opts(None)
+        from voxtype.engine_worker import _stt_opts
+        m = _model(None, "es", {})
+        opts = _stt_opts(m, None)
         self.assertEqual(opts, {"language": "es"})
 
     def test_per_call_language_overrides_default(self):
-        from voxtype.stt_engine import STTEngine
-        eng = STTEngine()
-        eng._backend = None
-        eng._language = "en"
-        opts = eng._build_opts("fr")
+        from voxtype.engine_worker import _stt_opts
+        m = _model(None, "en", {})
+        opts = _stt_opts(m, "fr")
         self.assertEqual(opts["language"], "fr")
 
 

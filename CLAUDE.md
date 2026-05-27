@@ -7,11 +7,15 @@ This file is the LLM-targeted summary of how the code is wired.
 
 Pure-Python / PySide6 voice-dictation overlay for Windows. Hold a
 hotkey, speak, release — cleaned transcript pastes at the cursor.
-STT and TTS both run **in-process via PyTorch through one generic
-backend per modality** that dispatches to family handlers by sniffing
-HuggingFace `config.json`. An embedded aiohttp server (default
-`:6600`) exposes both engines on OpenAI-compatible endpoints. LLM
-transcript cleanup is routed through telecode's proxy at `:1235`.
+STT and TTS run in a **single shared torch worker subprocess**
+(`engine_worker`), one generic backend per modality, dispatching to
+family handlers by sniffing HuggingFace `config.json`. The GUI process
+never imports torch — it spawns the worker and talks to it over a
+localhost socket (`engine_ipc` framing, `engine_host` manager). This
+lets the worker **exit on idle to free the CUDA context** (see
+"Engine worker" below). An embedded aiohttp server (default `:6600`)
+exposes both engines on OpenAI-compatible endpoints. LLM transcript
+cleanup is routed through telecode's proxy at `:1235`.
 
 For the full list of supported STT/TTS families and per-family knobs,
 see the tables in README.md.
@@ -30,7 +34,10 @@ voxtype/
     ├── audio.py / hotkey.py / vad.py / screen_capture.py / typer.py
     ├── history.py / debug_log.py
     ├── sounds.py                 # Fire-and-forget audio cues
-    ├── stt_engine.py / tts_engine.py / stt.py
+    ├── stt_engine.py / tts_engine.py / stt.py   # IPC proxies (no torch)
+    ├── engine_ipc.py             # Length-prefixed JSON+binary socket framing
+    ├── engine_worker.py          # Torch subprocess: both backends + 2-stage idle
+    ├── engine_host.py            # GUI-side worker manager (spawn/respawn/poll)
     ├── server.py                 # Embedded aiohttp /v1/audio/* server
     ├── llm.py                    # OpenAI-shape POST to telecode
     ├── process.py                # Facade over engines for tray UI
@@ -50,12 +57,21 @@ voxtype/
 ## Runtime architecture
 
 ```
-Main thread          Qt event loop — widgets, tray, pill, signal delivery
-voxtype-asyncio      asyncio loop — HTTP server, llm.enhance, engine load/unload
-voxtype-stt          single-thread executor — torch STT inference
-voxtype-tts          single-thread executor — torch TTS synthesis
-pynput thread        raw keyboard hook
+GUI process (no torch)
+  Main thread          Qt event loop — widgets, tray, pill, signal delivery
+  voxtype-asyncio      asyncio loop — HTTP server, llm.enhance, IPC to worker
+  engine-host-poller   polls worker status every 1.5s, caches it, fans out
+  pynput thread        raw keyboard hook
+engine_worker process (owns the CUDA context)
+  accept loop + per-connection threads; one lock serializes torch work;
+  worker-idle thread runs the two-stage idle monitor
 ```
+
+Engine calls (`configure/ensure_loaded/transcribe/synthesize/unload`) are
+async on the GUI side; they run the blocking socket round-trip in a
+default executor and forward to the worker. `get_status()`/`idle_info()`
+are sync (called from the Qt thread every second) and read ONLY the
+poller's cached snapshot — never do blocking IPC there.
 
 Cross-thread handoff uses Qt signals or `QTimer.singleShot(0, …)`.
 **Engine status callbacks fire on the executor thread — never touch Qt
@@ -68,21 +84,24 @@ Pipeline state machine (PillState):
 `idle → recording → processing → [enhancing →] typing → idle`. On
 failure → `error` for 2 s → `idle`.
 
-**Idle auto-unload.** Each engine runs a daemon watcher thread that
-polls `_last_used` every 2 s and unloads after `*_idle_unload_sec` of
-inactivity. `_request_unload()` runs `unload()` on the captured worker
-loop (`self._loop`) via `run_coroutine_threadsafe` and **blocks the
-watcher thread on the Future** (`fut.result(timeout=60)`): `unload()`
-acquires an `asyncio.Lock` bound to that loop so it must run there
-(`asyncio.run()` would raise "bound to a different event loop"), and
-waiting means the watcher re-fires only after the unload settles
-(no per-2 s re-queue) and logs `complete` / `timed out — worker loop
-busy`. The watcher body is wrapped so an exception can't kill it.
-`_do_unload_locked` frees weights via `run_in_executor` so GPU teardown
-never stalls the loop or shutdown. NOTE: if the worker loop is itself
-blocked by a long synchronous torch/CUDA call (e.g. `torch.compile`
-first-inference compile holding the GIL), the scheduled unload waits
-for the loop to free — the timeout log surfaces this.
+**Engine worker + two-stage idle.** Why a subprocess at all:
+`torch.cuda.empty_cache()` only returns the allocator's cached blocks;
+the **CUDA context** (~300-600 MB of context + kernels + cuBLAS/cuDNN
+workspaces) stays resident for the life of the process that first
+touched CUDA. The only way to give it back is to exit that process. So
+torch lives in `engine_worker` and the worker's idle monitor (every
+2 s) is two-stage (modeled on docgraph's daemon):
+  1. per-modality `*_idle_unload_sec` → drop that model's weights (the
+     big VRAM chunk); reload lazily on the next request.
+  2. `engine_idle_exit_sec` once BOTH models are unloaded → the worker
+     **exits the process**, releasing the CUDA context. `engine_host`
+     respawns it on the next `transcribe`/`synthesize` (lazy spawn).
+The status poller uses `request(..., spawn=False)` so polling never
+resurrects an idle-exited worker. The worker is bound to the
+kill-on-close Job Object (`process.bind_to_lifetime_job`) so it dies
+with the GUI; `process.stop_all()` also calls `engine_host.stop()`.
+`engine.idle_info()` reports stage-1's `(idle_unload_sec, remaining)`
+(from the cached status) for the "Live state" tile countdown.
 
 **Log messages must stay ASCII-safe.** `debug_log` reconfigures the
 stderr handler with `errors="backslashreplace"` because the Windows
@@ -91,9 +110,9 @@ line otherwise raises `UnicodeEncodeError` that escapes
 `logging.handleError` and propagates out of the `log.*()` call,
 killing the calling thread. This is exactly what silently killed the
 idle watcher (its message contained `≥`/`—`) so auto-unload never
-fired. Keep new log strings ASCII regardless.
-`engine.idle_info()` → `(idle_unload_sec, remaining_sec)` feeds the
-settings cards' "Live state" tile countdown (`_live_state_tile`).
+fired. Keep new log strings ASCII regardless. The worker logs to its
+own `data/voxtype-worker.log` (separate file so the two processes don't
+fight over `voxtype.log`).
 
 ## Generic backend dispatcher
 

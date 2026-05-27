@@ -1,30 +1,21 @@
-"""TTS engine orchestrator — owns lifecycle, delegates to the generic
-backend.
+"""TTS engine — thin proxy over the out-of-process torch worker.
 
-Synthesis is done by `GenericTTSBackend`, which auto-dispatches by
-model family. This module handles:
-  - load / unload locking
-  - idle-unload watcher
-  - status listeners
-  - per-call streaming bridge (sync generator → async queue → caller)
-  - rebuild-on-config-change via `_key()`
-
-Per-family options live in `settings.tts_opts` (a free-form dict).
+Torch runs in `engine_worker`; this module forwards over IPC while keeping
+the public API (`configure / ensure_loaded / synthesize /
+synthesize_pcm_chunks / unload / get_status / get_backend / idle_info /
+sample_rate / stream_default / on_status_change`). The worker returns raw
+PCM; we wrap it into WAV here (so server.py's WAV response is unchanged).
 """
 from __future__ import annotations
 
 import asyncio
 import io
 import logging
-import threading
-import time
 import wave
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from voxtype.backends import get_tts_backend
-from voxtype.backends.tts_base import TTSBackend, TTSLoadConfig
+from voxtype.engine_host import get_host
 
 log = logging.getLogger("voxtype.tts_engine")
 
@@ -46,20 +37,26 @@ class TTSStatus:
         return "tts"
 
 
+class _BackendView:
+    def detected_family(self) -> str:
+        return (get_host().cached_status().get("tts") or {}).get("family", "")
+
+    def voices(self) -> list:
+        # Dynamic (non-catalog) voices live in the worker; the static
+        # family_detect catalog covers the common families, so this
+        # fallback degrades to empty rather than a cross-process query.
+        return []
+
+
 class TTSEngine:
-    """Singleton — call `get_engine()`. Thread-safe."""
+    """Singleton — call `get_engine()`. Proxies to the shared worker."""
 
     def __init__(self) -> None:
-        self._backend: TTSBackend | None = None
-        self._model_lock = asyncio.Lock()
-        self._exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="voxtype-tts")
-        self._loaded_key: tuple | None = None
-        self._status = TTSStatus()
+        self._loading = False
+        self._last_error = ""
+        self._sample_rate = 24000
         self._listeners: list[Callable[[TTSStatus], None]] = []
-        self._last_used = 0.0
-        self._idle_unload_sec = 0
-        self._idle_watch_started = False
-        self._loop: asyncio.AbstractEventLoop | None = None
+        self._backend_view = _BackendView()
 
         self._model_path = ""
         self._device = "cpu"
@@ -70,75 +67,66 @@ class TTSEngine:
         self._attn_impl = "auto"
         self._stream_default = False
         self._seed = -1
+        self._idle_unload_sec = 0
+        self._idle_exit_sec = 60
         self._opts: dict[str, Any] = {}
+
+        get_host().on_status(self._on_host_status)
 
     # ── Listener wiring ──────────────────────────────────────────────
 
     def on_status_change(self, fn: Callable[[TTSStatus], None]) -> None:
         self._listeners.append(fn)
 
-    def get_status(self) -> TTSStatus:
-        family = ""
-        if self._backend is not None:
-            try:
-                family = self._backend.detected_family() or ""
-            except Exception:
-                family = ""
-        return TTSStatus(
-            running=self._status.running,
-            ready=self._status.ready,
-            pid=None,
-            last_error=self._status.last_error,
-            family=family,
-        )
-
-    def get_backend(self) -> TTSBackend | None:
-        return self._backend
-
-    def idle_info(self) -> tuple[int, float]:
-        """Live auto-unload telemetry for the UI.
-
-        Returns (idle_unload_sec, remaining_sec). remaining_sec is -1
-        when the model isn't loaded or auto-unload is disabled; otherwise
-        the seconds left before the idle watcher unloads."""
-        if self._backend is None or self._idle_unload_sec <= 0:
-            return (self._idle_unload_sec, -1.0)
-        idle = time.monotonic() - (self._last_used or 0.0)
-        return (self._idle_unload_sec, max(0.0, self._idle_unload_sec - idle))
-
-    def _notify(self) -> None:
+    def _on_host_status(self, _snap: dict) -> None:
+        snap = get_host().cached_status().get("tts") or {}
+        if snap.get("loaded") and snap.get("sample_rate"):
+            self._sample_rate = int(snap["sample_rate"])
+        st = self.get_status()
         for fn in list(self._listeners):
             try:
-                fn(self.get_status())
+                fn(st)
             except Exception:
                 pass
 
+    def get_status(self) -> TTSStatus:
+        snap = get_host().cached_status().get("tts") or {}
+        ready = bool(snap.get("loaded"))
+        err = "" if ready else (snap.get("error") or self._last_error)
+        return TTSStatus(
+            running=ready or self._loading, ready=ready, pid=None,
+            last_error=err, family=snap.get("family", ""),
+        )
+
+    def get_backend(self) -> _BackendView:
+        return self._backend_view
+
+    def idle_info(self) -> tuple[int, float]:
+        snap = get_host().cached_status().get("tts") or {}
+        limit = int(snap.get("idle_unload_sec", self._idle_unload_sec) or 0)
+        if not snap.get("loaded"):
+            return (limit, -1.0)
+        return (limit, float(snap.get("remaining", -1.0)))
+
+    @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
+    def stream_default(self) -> bool:
+        return self._stream_default
+
     # ── Configuration ────────────────────────────────────────────────
 
-    def _effective_model(self) -> str:
-        return self._model_path or DEFAULT_MODEL
-
-    def _effective_voice(self) -> str:
-        """Validate voice against the loaded backend's catalog. If the
-        catalog is empty (pre-load), accept the user value as-is — the
-        family handler falls back to its default when the catalog
-        appears."""
-        v = (self._voice or "").strip()
-        be = self._backend
-        if be is None:
-            return v or DEFAULT_VOICE
-        ids = be.voice_ids()
-        if not ids:
-            return v or (be.default_voice or DEFAULT_VOICE)
-        if v in ids:
-            return v
-        return be.default_voice or next(iter(ids), DEFAULT_VOICE)
-
-    def _key(self) -> tuple:
-        return (
-            self._effective_model(), self._device,
-            bool(self._torch_compile), self._attn_impl,
-        )
+    def _cfg(self) -> dict[str, Any]:
+        return {
+            "model_id": self._model_path or "",
+            "device": self._device, "voice": self._voice,
+            "speed": self._speed, "warmup": self._warmup,
+            "torch_compile": self._torch_compile, "attn_impl": self._attn_impl,
+            "seed": self._seed, "opts": dict(self._opts),
+            "idle_unload_sec": self._idle_unload_sec,
+        }
 
     async def configure(self, s) -> None:
         self._model_path = str(getattr(s, "tts_model_path", "") or "")
@@ -151,240 +139,101 @@ class TTSEngine:
         self._stream_default = bool(getattr(s, "tts_stream", False))
         self._seed = int(getattr(s, "tts_seed", -1))
         self._idle_unload_sec = int(getattr(s, "tts_idle_unload_sec", 0))
+        self._idle_exit_sec = int(getattr(s, "engine_idle_exit_sec", 60))
         opts = getattr(s, "tts_opts", {}) or {}
         self._opts = dict(opts) if isinstance(opts, dict) else {}
+        await self._send("configure", {"modality": "tts", "cfg": self._cfg(),
+                                       "idle_exit_sec": self._idle_exit_sec},
+                         spawn=False, swallow=True)
 
-        if self._loaded_key is not None and self._loaded_key != self._key():
-            log.info("tts config changed - unloading current backend")
-            await self.unload()
+    # ── IPC helpers ──────────────────────────────────────────────────
 
-    @property
-    def sample_rate(self) -> int:
-        return self._backend.sample_rate if self._backend is not None else 24000
-
-    @property
-    def stream_default(self) -> bool:
-        return self._stream_default
-
-    # ── Load / unload ────────────────────────────────────────────────
-
-    async def ensure_loaded(self) -> None:
-        if self._backend is not None and self._loaded_key == self._key():
-            return
-        async with self._model_lock:
-            if self._backend is not None and self._loaded_key == self._key():
-                return
-            if self._backend is not None:
-                await self._do_unload_locked()
-            await self._do_load_locked()
-
-    async def _do_load_locked(self) -> None:
-        model_id = self._effective_model()
-        self._loop = asyncio.get_running_loop()
-        backend = get_tts_backend()
-        log.info("tts loading model=%s device=%s", model_id, self._device)
-        self._status.last_error = ""
-        self._status.running = False
-        self._status.ready = False
-        self._notify()
-
-        cfg = TTSLoadConfig(
-            model_id=model_id,
-            device=self._device,
-            warmup=self._warmup,
-            torch_compile=self._torch_compile,
-            attn_impl=self._attn_impl,
-        )
+    async def _send(self, op: str, header: dict, payload: bytes = b"", *,
+                    spawn: bool = True, swallow: bool = False):
         loop = asyncio.get_event_loop()
         try:
-            await loop.run_in_executor(self._exec, backend.load_sync, cfg)
-            self._backend = backend
-            self._loaded_key = self._key()
-            self._status.running = True
-            self._status.ready = True
-            self._last_used = time.monotonic()
-            log.info("tts ready (%s)", backend.runtime_info())
-            self._notify()
-            self._ensure_idle_watcher()
+            return await loop.run_in_executor(
+                None, lambda: get_host().request(op, header, payload, spawn=spawn))
         except Exception as exc:  # noqa: BLE001
-            log.error("tts load failed: %s", exc)
-            self._backend = None
-            self._loaded_key = None
-            self._status.running = False
-            self._status.ready = False
-            self._status.last_error = str(exc)
-            self._notify()
+            if swallow:
+                return ({"ok": False, "error": str(exc)}, b"")
             raise
 
-    async def unload(self) -> None:
-        async with self._model_lock:
-            await self._do_unload_locked()
+    # ── Lifecycle / synthesis ────────────────────────────────────────
 
-    async def _do_unload_locked(self) -> None:
-        if self._backend is None:
-            return
-        log.info("tts unloading")
-        be = self._backend
-        self._backend = None
-        self._loaded_key = None
-        self._status.running = False
-        self._status.ready = False
+    async def ensure_loaded(self) -> None:
+        self._loading = True
         self._notify()
         try:
-            # Free weights off the event loop — GPU teardown can be slow
-            # and must not stall the worker loop (or shutdown).
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(self._exec, be.unload_sync)
-        except Exception as exc:  # noqa: BLE001
-            log.debug("tts unload exc (%s)", exc)
+            rhdr, _ = await self._send("load", {
+                "modality": "tts", "cfg": self._cfg(),
+                "idle_exit_sec": self._idle_exit_sec})
+            if not rhdr.get("ok"):
+                self._last_error = rhdr.get("error", "load failed")
+                raise RuntimeError(self._last_error)
+            if rhdr.get("sample_rate"):
+                self._sample_rate = int(rhdr["sample_rate"])
+            self._last_error = ""
+        finally:
+            self._loading = False
+            self._notify()
 
-    # ── Synthesis ────────────────────────────────────────────────────
-
-    def _build_opts(self, voice: str | None,
-                     speed: float | None) -> tuple[str, dict[str, Any]]:
-        """Resolve the per-call voice + return the family opts dict."""
-        v = (voice or "").strip() if isinstance(voice, str) else ""
-        if not v:
-            v = self._effective_voice()
-        else:
-            be = self._backend
-            if be is not None:
-                ids = be.voice_ids()
-                if ids and v not in ids:
-                    log.debug("tts: per-call voice %r unknown - using default", v)
-                    v = self._effective_voice()
-        be = self._backend
-        supports_speed = be.supports("speed") if be is not None else True
-        spd = (float(speed) if (speed and speed > 0)
-               else float(self._speed or 1.0))
-        if not supports_speed:
-            spd = 1.0
-        opts = dict(self._opts)
-        opts["speed"] = spd
-        # Universal seed: only forwarded to families that consume it.
-        # Per-family `seed` (e.g. VITS) overrides the universal value.
-        if self._seed != -1 and "seed" not in opts:
-            opts["seed"] = int(self._seed)
-        # Filter against backend's runtime spec when available, so
-        # stale keys from a different family don't leak through.
-        if be is not None:
-            specs = be.runtime_options()
-            if specs:
-                allowed = {"speed", "seed"} | {s.key for s in specs}
-                opts = {k: opts[k] for k in opts if k in allowed}
-        return v, opts
-
-    async def synthesize(self, text: str,
-                          voice: str | None = None,
-                          speed: float | None = None) -> bytes:
-        """Return WAV bytes (16-bit mono, backend's native sample rate)."""
-        await self.ensure_loaded()
-        assert self._backend is not None
-        self._last_used = time.monotonic()
-        v, opts = self._build_opts(voice, speed)
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self._exec, self._collect_wav, text, v, opts)
-
-    def _collect_wav(self, text: str, voice: str, opts: dict[str, Any]) -> bytes:
-        """Drain the backend's sync chunk generator into a single WAV."""
-        assert self._backend is not None
-        parts: list[bytes] = []
-        for chunk in self._backend.synth_chunks_sync(text, voice, opts):
-            if chunk:
-                parts.append(chunk)
-        pcm = b"".join(parts)
+    async def synthesize(self, text: str, voice: str | None = None,
+                         speed: float | None = None) -> bytes:
+        """Return WAV bytes (16-bit mono, the backend's native rate)."""
+        rhdr, pcm = await self._send("synthesize", {
+            "text": text, "voice": voice, "speed": speed,
+            "cfg": self._cfg(), "idle_exit_sec": self._idle_exit_sec})
+        if not rhdr.get("ok"):
+            self._last_error = rhdr.get("error", "synthesize failed")
+            raise RuntimeError(self._last_error)
+        self._last_error = ""
+        sr = int(rhdr.get("sample_rate", self._sample_rate))
+        self._sample_rate = sr
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
-            wf.setframerate(self._backend.sample_rate)
+            wf.setframerate(sr)
             wf.writeframes(pcm)
         return buf.getvalue()
 
-    async def synthesize_pcm_chunks(
-        self, text: str,
-        voice: str | None = None,
-        speed: float | None = None,
-    ):
-        """Async generator yielding raw int16 PCM chunks (mono).
-        Server side wraps them in a chunked WAV response."""
-        await self.ensure_loaded()
-        assert self._backend is not None
-        self._last_used = time.monotonic()
-        v, opts = self._build_opts(voice, speed)
-
+    async def synthesize_pcm_chunks(self, text: str, voice: str | None = None,
+                                    speed: float | None = None):
+        """Async generator of raw int16 PCM chunks. Bridges the worker's
+        blocking stream (run in an executor) into an asyncio queue."""
         loop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        header = {"text": text, "voice": voice, "speed": speed,
+                  "cfg": self._cfg(), "idle_exit_sec": self._idle_exit_sec}
 
         def _producer() -> None:
             try:
-                assert self._backend is not None
-                for chunk in self._backend.synth_chunks_sync(text, v, opts):
-                    if not chunk:
-                        continue
-                    asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
+                for fhdr, payload in get_host().stream("synth_stream", header):
+                    if fhdr.get("sample_rate"):
+                        self._sample_rate = int(fhdr["sample_rate"])
+                    if payload:
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put(payload), loop).result()
+            except Exception as exc:  # noqa: BLE001
+                log.error("tts stream failed: %s", exc)
             finally:
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
 
-        loop.run_in_executor(self._exec, _producer)
+        loop.run_in_executor(None, _producer)
         while True:
             chunk = await queue.get()
             if chunk is None:
                 return
             yield chunk
 
-    # ── Idle unload watcher ──────────────────────────────────────────
+    async def unload(self) -> None:
+        await self._send("unload", {"modality": "tts"}, spawn=False,
+                         swallow=True)
+        self._notify()
 
-    def _ensure_idle_watcher(self) -> None:
-        if self._idle_watch_started:
-            return
-        self._idle_watch_started = True
-
-        def _loop_thread() -> None:
-            INTERVAL = 2.0
-            while True:
-                time.sleep(INTERVAL)
-                try:
-                    if self._backend is None:
-                        continue
-                    if self._idle_unload_sec <= 0:
-                        continue
-                    idle = time.monotonic() - (self._last_used or 0.0)
-                    if idle < self._idle_unload_sec:
-                        continue
-                    log.info("tts idle for %.0fs >= %ds - unloading",
-                             idle, self._idle_unload_sec)
-                    self._request_unload()
-                except Exception as exc:  # noqa: BLE001 — never let the watcher die
-                    log.error("tts idle watcher iteration failed: %s", exc)
-
-        threading.Thread(target=_loop_thread, daemon=True,
-                         name="voxtype-tts-idle").start()
-
-    def _request_unload(self) -> None:
-        """Run unload() on the worker loop the model was loaded on, and
-        BLOCK this (watcher) thread until it finishes.
-
-        `unload()` acquires an asyncio.Lock bound to the worker loop, so
-        it must run there — asyncio.run() would spin up a fresh loop and
-        raise 'bound to a different event loop'. We wait on the Future so
-        the watcher only re-fires after the unload actually settles
-        (instead of queuing a new unload every 2 s) and so failures or
-        stalls are logged instead of vanishing."""
-        loop = self._loop
-        if loop is None or not loop.is_running():
-            log.warning("tts idle-unload: worker loop unavailable "
-                        "(loop=%r) — skipping", loop)
-            return
-        try:
-            fut = asyncio.run_coroutine_threadsafe(self.unload(), loop)
-            fut.result(timeout=60)
-            log.info("tts idle-unload complete")
-        except FuturesTimeout:
-            log.error("tts idle-unload timed out - worker loop busy; "
-                      "will retry")
-        except Exception as exc:  # noqa: BLE001
-            log.error("tts idle-unload failed: %s", exc)
+    def _notify(self) -> None:
+        self._on_host_status({})
 
 
 # ── Module singleton ─────────────────────────────────────────────────

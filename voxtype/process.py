@@ -115,12 +115,19 @@ async def restart_service(name: ServiceName, s) -> None:
 
 async def stop_all() -> None:
     from voxtype import stt_engine, tts_engine, server
+    from voxtype.engine_host import get_host
     await asyncio.gather(
         stt_engine.get_engine().unload(),
         tts_engine.get_engine().unload(),
         server.stop(),
         return_exceptions=True,
     )
+    # Terminate the torch worker subprocess so it doesn't outlive the GUI.
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, get_host().stop)
+    except Exception:
+        pass
 
 
 # ── Kill-on-close Job Object (preserved for future subprocess use) ──

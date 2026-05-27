@@ -1,28 +1,22 @@
-"""STT engine orchestrator — owns lifecycle, delegates to the generic
-backend.
+"""STT engine — thin proxy over the out-of-process torch worker.
 
-The actual transcription work is done by `GenericSTTBackend`, which
-auto-dispatches by model family. This module handles:
-  - load / unload locking
-  - idle-unload watcher
-  - status listeners
-  - rebuild-on-config-change via `_key()`
-
-Per-family options live in `settings.stt_opts` (a free-form dict).
+Torch runs in `engine_worker` (a child process) so its CUDA context can be
+freed by exiting that process on idle (see engine_host / engine_worker).
+This module keeps the SAME public API the rest of VoxType expects
+(`configure / ensure_loaded / transcribe / unload / get_status /
+get_backend().detected_family() / idle_info / on_status_change`) but every
+call forwards over IPC. Per-family options still live in `settings.stt_opts`
+and are filtered worker-side against the live backend's `runtime_options()`.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from voxtype.backends import get_stt_backend
 from voxtype.backends.shared import WHISPER_LANGUAGES
-from voxtype.backends.stt_base import LoadConfig, STTBackend
+from voxtype.engine_host import get_host
 
 log = logging.getLogger("voxtype.stt_engine")
 
@@ -55,20 +49,25 @@ class EngineStatus:
         return "stt"
 
 
+class _BackendView:
+    """Stand-in for the in-process backend the settings UI used to poll.
+    Reads the family the worker reported via the host status cache."""
+
+    def detected_family(self) -> str:
+        return (get_host().cached_status().get("stt") or {}).get("family", "")
+
+    def runtime_info(self) -> dict:
+        return get_host().cached_status().get("stt") or {}
+
+
 class STTEngine:
-    """Singleton — call `get_engine()`. Thread-safe."""
+    """Singleton — call `get_engine()`. Proxies to the shared worker."""
 
     def __init__(self) -> None:
-        self._backend: STTBackend | None = None
-        self._model_lock = asyncio.Lock()
-        self._exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="voxtype-stt")
-        self._loaded_key: tuple | None = None
-        self._status = EngineStatus()
+        self._loading = False
+        self._last_error = ""
         self._listeners: list[Callable[[EngineStatus], None]] = []
-        self._last_used = 0.0
-        self._idle_unload_sec = 0
-        self._idle_watch_started = False
-        self._loop: asyncio.AbstractEventLoop | None = None
+        self._backend_view = _BackendView()
 
         self._model_path = ""
         self._device = "cpu"
@@ -77,62 +76,54 @@ class STTEngine:
         self._warmup = True
         self._torch_compile = False
         self._attn_impl = "auto"
+        self._idle_unload_sec = 0
+        self._idle_exit_sec = 60
         self._opts: dict[str, Any] = {}
+
+        get_host().on_status(self._on_host_status)
 
     # ── Listener wiring ──────────────────────────────────────────────
 
     def on_status_change(self, fn: Callable[[EngineStatus], None]) -> None:
         self._listeners.append(fn)
 
-    def get_status(self) -> EngineStatus:
-        family = ""
-        if self._backend is not None:
-            try:
-                family = self._backend.detected_family() or ""
-            except Exception:
-                family = ""
-        return EngineStatus(
-            running=self._status.running,
-            ready=self._status.ready,
-            pid=None,
-            last_error=self._status.last_error,
-            family=family,
-        )
-
-    def get_backend(self) -> STTBackend | None:
-        return self._backend
-
-    def idle_info(self) -> tuple[int, float]:
-        """Live auto-unload telemetry for the UI.
-
-        Returns (idle_unload_sec, remaining_sec). remaining_sec is -1
-        when the model isn't loaded or auto-unload is disabled; otherwise
-        the seconds left before the idle watcher unloads."""
-        if self._backend is None or self._idle_unload_sec <= 0:
-            return (self._idle_unload_sec, -1.0)
-        idle = time.monotonic() - (self._last_used or 0.0)
-        return (self._idle_unload_sec, max(0.0, self._idle_unload_sec - idle))
-
-    def _notify(self) -> None:
+    def _on_host_status(self, _snap: dict) -> None:
+        st = self.get_status()
         for fn in list(self._listeners):
             try:
-                fn(self.get_status())
+                fn(st)
             except Exception:
                 pass
 
+    def get_status(self) -> EngineStatus:
+        snap = get_host().cached_status().get("stt") or {}
+        ready = bool(snap.get("loaded"))
+        err = "" if ready else (snap.get("error") or self._last_error)
+        return EngineStatus(
+            running=ready or self._loading, ready=ready, pid=None,
+            last_error=err, family=snap.get("family", ""),
+        )
+
+    def get_backend(self) -> _BackendView:
+        return self._backend_view
+
+    def idle_info(self) -> tuple[int, float]:
+        snap = get_host().cached_status().get("stt") or {}
+        limit = int(snap.get("idle_unload_sec", self._idle_unload_sec) or 0)
+        if not snap.get("loaded"):
+            return (limit, -1.0)
+        return (limit, float(snap.get("remaining", -1.0)))
+
     # ── Configuration ────────────────────────────────────────────────
 
-    def _effective_model(self) -> str:
-        return self._model_path or DEFAULT_MODEL
-
-    def _key(self) -> tuple:
-        # Fields that require a model rebuild. Per-call kwargs (language,
-        # task, beams, prompt) are NOT in here.
-        return (
-            self._effective_model(), self._device,
-            self._dtype_pref, bool(self._torch_compile),
-            self._attn_impl,
-        )
+    def _cfg(self) -> dict[str, Any]:
+        return {
+            "model_id": self._model_path or "",
+            "device": self._device, "dtype": self._dtype_pref,
+            "warmup": self._warmup, "torch_compile": self._torch_compile,
+            "attn_impl": self._attn_impl, "language": self._language,
+            "opts": dict(self._opts), "idle_unload_sec": self._idle_unload_sec,
+        }
 
     async def configure(self, s) -> None:
         self._model_path = str(getattr(s, "stt_model_path", "") or "")
@@ -143,172 +134,68 @@ class STTEngine:
         self._torch_compile = bool(getattr(s, "stt_torch_compile", False))
         self._attn_impl = str(getattr(s, "stt_attn_impl", "auto") or "auto")
         self._idle_unload_sec = int(getattr(s, "stt_idle_unload_sec", 0))
+        self._idle_exit_sec = int(getattr(s, "engine_idle_exit_sec", 60))
         opts = getattr(s, "stt_opts", {}) or {}
         self._opts = dict(opts) if isinstance(opts, dict) else {}
+        # Push to the worker if it is already up (spawn=False: configuring
+        # at boot must not start torch). The worker also gets this cfg
+        # inline on every load/transcribe, so a respawn is self-correcting.
+        await self._send("configure", {"modality": "stt", "cfg": self._cfg(),
+                                       "idle_exit_sec": self._idle_exit_sec},
+                         spawn=False, swallow=True)
 
-        if self._loaded_key is not None and self._loaded_key != self._key():
-            log.info("stt config changed - unloading current backend")
-            await self.unload()
+    # ── IPC helpers ──────────────────────────────────────────────────
 
-    # ── Load / unload ────────────────────────────────────────────────
-
-    async def ensure_loaded(self) -> None:
-        if self._backend is not None and self._loaded_key == self._key():
-            return
-        async with self._model_lock:
-            if self._backend is not None and self._loaded_key == self._key():
-                return
-            if self._backend is not None:
-                await self._do_unload_locked()
-            await self._do_load_locked()
-
-    async def _do_load_locked(self) -> None:
-        model_id = self._effective_model()
-        self._loop = asyncio.get_running_loop()
-        backend = get_stt_backend()
-        log.info("stt loading model=%s device=%s", model_id, self._device)
-        self._status.last_error = ""
-        self._status.running = False
-        self._status.ready = False
-        self._notify()
-
-        cfg = LoadConfig(
-            model_id=model_id,
-            device=self._device,
-            dtype=self._dtype_pref,
-            warmup=self._warmup,
-            torch_compile=self._torch_compile,
-            attn_impl=self._attn_impl,
-        )
+    async def _send(self, op: str, header: dict, payload: bytes = b"", *,
+                    spawn: bool = True, swallow: bool = False):
         loop = asyncio.get_event_loop()
         try:
-            await loop.run_in_executor(self._exec, backend.load_sync, cfg)
-            self._backend = backend
-            self._loaded_key = self._key()
-            self._status.running = True
-            self._status.ready = True
-            self._last_used = time.monotonic()
-            log.info("stt ready (%s)", backend.runtime_info())
-            self._notify()
-            self._ensure_idle_watcher()
+            return await loop.run_in_executor(
+                None, lambda: get_host().request(op, header, payload, spawn=spawn))
         except Exception as exc:  # noqa: BLE001
-            log.error("stt load failed: %s", exc)
-            self._backend = None
-            self._loaded_key = None
-            self._status.running = False
-            self._status.ready = False
-            self._status.last_error = str(exc)
-            self._notify()
+            if swallow:
+                return ({"ok": False, "error": str(exc)}, b"")
             raise
 
-    async def unload(self) -> None:
-        async with self._model_lock:
-            await self._do_unload_locked()
+    # ── Lifecycle / inference ────────────────────────────────────────
 
-    async def _do_unload_locked(self) -> None:
-        if self._backend is None:
-            return
-        log.info("stt unloading")
-        be = self._backend
-        self._backend = None
-        self._loaded_key = None
-        self._status.running = False
-        self._status.ready = False
+    async def ensure_loaded(self) -> None:
+        self._loading = True
         self._notify()
         try:
-            # Free weights off the event loop — GPU teardown can be slow
-            # and must not stall the worker loop (or shutdown).
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(self._exec, be.unload_sync)
-        except Exception as exc:  # noqa: BLE001
-            log.debug("stt unload exc (%s)", exc)
-
-    # ── Transcription ────────────────────────────────────────────────
-
-    def _build_opts(self, language: str | None) -> dict[str, Any]:
-        """Per-call opts dict assembled from settings + filtered against
-        the backend's `supports()` flags. The universal `language` is
-        always passed through; family-specific opts are filtered out
-        for backends that don't honour them so a stale entry from a
-        different family can't sneak through."""
-        backend = self._backend
-        lang = (language or self._language or "en").strip() or "en"
-        out: dict[str, Any] = {"language": lang}
-        if not backend:
-            return out
-        specs = backend.runtime_options() if hasattr(backend, "runtime_options") else []
-        allowed = {s.key for s in specs}
-        for k, v in self._opts.items():
-            if k in allowed:
-                out[k] = v
-        return out
+            rhdr, _ = await self._send("load", {
+                "modality": "stt", "cfg": self._cfg(),
+                "idle_exit_sec": self._idle_exit_sec})
+            if not rhdr.get("ok"):
+                self._last_error = rhdr.get("error", "load failed")
+                raise RuntimeError(self._last_error)
+            self._last_error = ""
+        finally:
+            self._loading = False
+            self._notify()
 
     async def transcribe(self, pcm: bytes, language: str | None = None) -> str:
-        """Run STT on raw 16 kHz mono int16 PCM. Returns the text."""
-        await self.ensure_loaded()
-        self._last_used = time.monotonic()
-        assert self._backend is not None
-        opts = self._build_opts(language)
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self._exec, self._backend.transcribe_sync, pcm, opts,
-        )
-
-    # ── Idle unload watcher ──────────────────────────────────────────
-
-    def _ensure_idle_watcher(self) -> None:
-        if self._idle_watch_started:
-            return
-        self._idle_watch_started = True
-
-        def _loop_thread() -> None:
-            INTERVAL = 2.0
-            while True:
-                time.sleep(INTERVAL)
-                try:
-                    if self._backend is None:
-                        continue
-                    if self._idle_unload_sec <= 0:
-                        continue
-                    idle = time.monotonic() - (self._last_used or 0.0)
-                    if idle < self._idle_unload_sec:
-                        continue
-                    log.info("stt idle for %.0fs >= %ds - unloading",
-                             idle, self._idle_unload_sec)
-                    self._request_unload()
-                except Exception as exc:  # noqa: BLE001 — never let the watcher die
-                    log.error("stt idle watcher iteration failed: %s", exc)
-
-        threading.Thread(target=_loop_thread, daemon=True,
-                         name="voxtype-stt-idle").start()
-
-    def _request_unload(self) -> None:
-        """Run unload() on the worker loop the model was loaded on, and
-        BLOCK this (watcher) thread until it finishes.
-
-        `unload()` acquires an asyncio.Lock bound to the worker loop, so
-        it must run there — asyncio.run() would spin up a fresh loop and
-        raise 'bound to a different event loop'. We wait on the Future so
-        the watcher only re-fires after the unload actually settles
-        (instead of queuing a new unload every 2 s) and so failures or
-        stalls are logged instead of vanishing."""
-        loop = self._loop
-        if loop is None or not loop.is_running():
-            log.warning("stt idle-unload: worker loop unavailable "
-                        "(loop=%r) — skipping", loop)
-            return
+        self._loading = True
         try:
-            fut = asyncio.run_coroutine_threadsafe(self.unload(), loop)
-            fut.result(timeout=60)
-            log.info("stt idle-unload complete")
-        except FuturesTimeout:
-            log.error("stt idle-unload timed out - worker loop busy; "
-                      "will retry")
-        except Exception as exc:  # noqa: BLE001
-            log.error("stt idle-unload failed: %s", exc)
+            rhdr, _ = await self._send("transcribe", {
+                "language": language or self._language, "cfg": self._cfg(),
+                "idle_exit_sec": self._idle_exit_sec}, pcm)
+        finally:
+            self._loading = False
+        if not rhdr.get("ok"):
+            self._last_error = rhdr.get("error", "transcribe failed")
+            raise RuntimeError(self._last_error)
+        self._last_error = ""
+        return rhdr.get("text", "")
 
-        threading.Thread(target=_loop_thread, daemon=True,
-                         name="voxtype-stt-idle").start()
+    async def unload(self) -> None:
+        # spawn=False: never resurrect an idle-exited worker just to unload.
+        await self._send("unload", {"modality": "stt"}, spawn=False,
+                         swallow=True)
+        self._notify()
+
+    def _notify(self) -> None:
+        self._on_host_status({})
 
 
 # ── Module singleton ─────────────────────────────────────────────────

@@ -69,6 +69,13 @@ class AppSettings:
     server_enabled: bool = True
     server_port: int = 6600
 
+    # ── Engine worker (out-of-process torch) ─────────────────────────
+    # Seconds the worker stays alive with BOTH models unloaded before it
+    # exits to release the CUDA context (~300-600 MB). The next request
+    # respawns it. 0 = never exit (weights still unload per
+    # stt/tts_idle_unload_sec, but the context lingers).
+    engine_idle_exit_sec: int = 60
+
     # ── STT (one generic backend, family auto-detected) ─────────────
     # `stt_model_path` accepts any HF repo ID (auto-downloaded) or a
     # local path — Whisper, Wav2Vec2, HuBERT, MMS, Seamless,
