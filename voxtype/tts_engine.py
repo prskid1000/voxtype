@@ -155,7 +155,7 @@ class TTSEngine:
         self._opts = dict(opts) if isinstance(opts, dict) else {}
 
         if self._loaded_key is not None and self._loaded_key != self._key():
-            log.info("tts config changed — unloading current backend")
+            log.info("tts config changed - unloading current backend")
             await self.unload()
 
     @property
@@ -251,7 +251,7 @@ class TTSEngine:
             if be is not None:
                 ids = be.voice_ids()
                 if ids and v not in ids:
-                    log.debug("tts: per-call voice %r unknown — using default", v)
+                    log.debug("tts: per-call voice %r unknown - using default", v)
                     v = self._effective_voice()
         be = self._backend
         supports_speed = be.supports("speed") if be is not None else True
@@ -352,7 +352,7 @@ class TTSEngine:
                     idle = time.monotonic() - (self._last_used or 0.0)
                     if idle < self._idle_unload_sec:
                         continue
-                    log.info("tts idle for %.0fs ≥ %ds — unloading",
+                    log.info("tts idle for %.0fs >= %ds - unloading",
                              idle, self._idle_unload_sec)
                     self._request_unload()
                 except Exception as exc:  # noqa: BLE001 — never let the watcher die
@@ -381,7 +381,7 @@ class TTSEngine:
             fut.result(timeout=60)
             log.info("tts idle-unload complete")
         except FuturesTimeout:
-            log.error("tts idle-unload timed out — worker loop busy; "
+            log.error("tts idle-unload timed out - worker loop busy; "
                       "will retry")
         except Exception as exc:  # noqa: BLE001
             log.error("tts idle-unload failed: %s", exc)

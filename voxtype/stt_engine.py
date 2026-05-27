@@ -147,7 +147,7 @@ class STTEngine:
         self._opts = dict(opts) if isinstance(opts, dict) else {}
 
         if self._loaded_key is not None and self._loaded_key != self._key():
-            log.info("stt config changed — unloading current backend")
+            log.info("stt config changed - unloading current backend")
             await self.unload()
 
     # ── Load / unload ────────────────────────────────────────────────
@@ -273,7 +273,7 @@ class STTEngine:
                     idle = time.monotonic() - (self._last_used or 0.0)
                     if idle < self._idle_unload_sec:
                         continue
-                    log.info("stt idle for %.0fs ≥ %ds — unloading",
+                    log.info("stt idle for %.0fs >= %ds - unloading",
                              idle, self._idle_unload_sec)
                     self._request_unload()
                 except Exception as exc:  # noqa: BLE001 — never let the watcher die
@@ -302,7 +302,7 @@ class STTEngine:
             fut.result(timeout=60)
             log.info("stt idle-unload complete")
         except FuturesTimeout:
-            log.error("stt idle-unload timed out — worker loop busy; "
+            log.error("stt idle-unload timed out - worker loop busy; "
                       "will retry")
         except Exception as exc:  # noqa: BLE001
             log.error("stt idle-unload failed: %s", exc)

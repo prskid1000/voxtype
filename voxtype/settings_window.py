@@ -765,22 +765,33 @@ def _lifecycle_row(load_label: str, unload_label: str, reload_label: str,
     h.addWidget(pill)
     h.addStretch(1)
 
-    def _mk(label: str, cb: Callable[[], None]) -> QPushButton:
+    # Optimistic in-flight action so the row reacts on click instead of
+    # waiting up to 1 s for the next poll. `action` ∈ {"load","unload",
+    # "reload"}; `since` guards against a stuck transition.
+    import time as _time
+    pend: dict = {"action": None, "since": 0.0}
+    _PENDING_TIMEOUT = 180.0
+
+    def _mk(label: str, action: str, cb: Callable[[], None]) -> QPushButton:
         b = QPushButton(label)
         b.setProperty("class", "ghost")
         b.setFixedHeight(28)
-        b.clicked.connect(lambda: _safe(cb))
+        b.clicked.connect(lambda: _click(action, cb))
         return b
 
-    def _safe(cb: Callable[[], None]) -> None:
+    def _click(action: str, cb: Callable[[], None]) -> None:
+        pend["action"] = action
+        pend["since"] = _time.monotonic()
         try:
             cb()
         except Exception as exc:
             log.error("lifecycle action failed: %s", exc)
+            pend["action"] = None
+        _refresh()  # paint the busy state immediately
 
-    btn_load   = _mk(load_label,   on_load)
-    btn_unload = _mk(unload_label, on_unload)
-    btn_reload = _mk(reload_label, on_reload)
+    btn_load   = _mk(load_label,   "load",   on_load)
+    btn_unload = _mk(unload_label, "unload", on_unload)
+    btn_reload = _mk(reload_label, "reload", on_reload)
     h.addWidget(btn_load)
     h.addWidget(btn_unload)
     h.addWidget(btn_reload)
@@ -792,19 +803,42 @@ def _lifecycle_row(load_label: str, unload_label: str, reload_label: str,
         "err":  (ERR,     "✗"),
         "off":  (FG_MUTE, "○"),
     }
+    _PEND_TEXT = {"load": "loading…", "unload": "unloading…",
+                  "reload": "reloading…"}
+
+    def _resolved(action: str, kind: str) -> bool:
+        if kind == "err":
+            return True
+        if action in ("load", "reload"):
+            return kind == "ok"
+        if action == "unload":
+            return kind in ("idle", "off")
+        return True
 
     def _refresh() -> None:
         try:
             text, kind = status_getter()
         except Exception:
             text, kind = ("error", "err")
+        action = pend["action"]
+        if action is not None:
+            if _resolved(action, kind) or (
+                    _time.monotonic() - pend["since"] > _PENDING_TIMEOUT):
+                pend["action"] = None
+            else:
+                text, kind = (_PEND_TEXT.get(action, "working…"), "busy")
         color, glyph = KINDS.get(kind, (FG_MUTE, "○"))
         pill.setText(f"{glyph} {text}")
         pill.setStyleSheet(f"color: {color}; font-size: 11.5px;")
-        # Enable/disable buttons by state
-        btn_load.setEnabled(kind in ("idle", "off", "err"))
-        btn_unload.setEnabled(kind in ("ok", "busy"))
-        btn_reload.setEnabled(kind != "off")
+        # While an action is in flight, lock all three buttons.
+        if pend["action"] is not None:
+            btn_load.setEnabled(False)
+            btn_unload.setEnabled(False)
+            btn_reload.setEnabled(False)
+        else:
+            btn_load.setEnabled(kind in ("idle", "off", "err"))
+            btn_unload.setEnabled(kind in ("ok", "busy"))
+            btn_reload.setEnabled(kind not in ("off",))
 
     _refresh()
     timer = QTimer(row)

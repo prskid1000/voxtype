@@ -83,6 +83,15 @@ never stalls the loop or shutdown. NOTE: if the worker loop is itself
 blocked by a long synchronous torch/CUDA call (e.g. `torch.compile`
 first-inference compile holding the GIL), the scheduled unload waits
 for the loop to free — the timeout log surfaces this.
+
+**Log messages must stay ASCII-safe.** `debug_log` reconfigures the
+stderr handler with `errors="backslashreplace"` because the Windows
+console is cp1252 — a non-cp1252 glyph (`≥`, em-dash, `…`) in a log
+line otherwise raises `UnicodeEncodeError` that escapes
+`logging.handleError` and propagates out of the `log.*()` call,
+killing the calling thread. This is exactly what silently killed the
+idle watcher (its message contained `≥`/`—`) so auto-unload never
+fired. Keep new log strings ASCII regardless.
 `engine.idle_info()` → `(idle_unload_sec, remaining_sec)` feeds the
 settings cards' "Live state" tile countdown (`_live_state_tile`).
 

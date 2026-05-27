@@ -132,6 +132,7 @@ QPushButton {{
     padding: 4px 10px; font-size: 11.5px; min-height: 22px;
 }}
 QPushButton:hover {{ border: 1px solid {ACCENT}; background: {BG_HOVER}; }}
+QPushButton:pressed {{ background: {BG_CARD}; border: 1px solid {ACCENT}; }}
 QPushButton:disabled {{ color: {FG_MUTE}; background: {BG_CARD}; }}
 QPushButton.primary {{
     background: {ACCENT}; color: {BG}; border: 1px solid {ACCENT}; font-weight: 600;
@@ -143,6 +144,8 @@ QPushButton.ghost {{
     background: transparent; border: 1px solid transparent; color: {FG_DIM};
 }}
 QPushButton.ghost:hover {{ color: {FG}; border: 1px solid {BORDER}; }}
+QPushButton.ghost:pressed {{ color: {FG}; background: {BG_ROW}; border: 1px solid {ACCENT}; }}
+QPushButton.ghost:disabled {{ color: {FG_MUTE}; background: transparent; border: 1px solid transparent; }}
 
 QLabel.stat_pill {{
     background: {BG_CARD}; border: 1px solid {BORDER}; border-radius: 4px;

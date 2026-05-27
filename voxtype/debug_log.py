@@ -34,6 +34,18 @@ def install(level: int = logging.INFO) -> None:
     file_h.setFormatter(fmt)
     root.addHandler(file_h)
 
-    stream_h = logging.StreamHandler(sys.stderr)
-    stream_h.setFormatter(fmt)
-    root.addHandler(stream_h)
+    # stderr handler — but ONLY once it's been made unicode-tolerant.
+    # On Windows the console is cp1252/charmap; emitting a log line with
+    # a non-cp1252 char (≥, em-dash, …) raises UnicodeEncodeError, which
+    # can escape logging.handleError and propagate out of the log call —
+    # killing whatever thread logged it. backslashreplace makes writes
+    # lossy-but-safe so a stray glyph can never crash a thread.
+    stream = sys.stderr
+    if stream is not None:  # None under pythonw.exe
+        try:
+            stream.reconfigure(errors="backslashreplace")  # py3.7+ TextIOWrapper
+        except Exception:
+            pass
+        stream_h = logging.StreamHandler(stream)
+        stream_h.setFormatter(fmt)
+        root.addHandler(stream_h)
