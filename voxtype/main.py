@@ -203,12 +203,18 @@ class Orchestrator(QObject):
         pcm = self.recorder.stop()
         dur = estimate_duration(pcm)
         log.info("hotkey up — captured %.2fs (%d bytes)", dur, len(pcm))
+
+        s = config.load()
+        # Cue plays the instant capture ends — independent of VAD/empty
+        # reject paths — so users (esp. with the pill hidden) always hear
+        # that the mic has closed and the next press is safe.
+        if s.sounds_enabled and getattr(s, "sound_stop_enabled", True):
+            sounds.play("stop", s.sound_stop)
+
         if not pcm:
             self._pipeline_gate = False
             self._set_pill("idle", "")
             return
-
-        s = config.load()
 
         # VAD
         if s.vad_enabled and not has_speech(pcm):
@@ -217,8 +223,6 @@ class Orchestrator(QObject):
             self._flash_error("No speech detected")
             return
 
-        if s.sounds_enabled and getattr(s, "sound_stop_enabled", True):
-            sounds.play("stop", s.sound_stop)
         self._set_pill("processing", "")
         self._pipeline_future = self._loop.submit(self._pipeline(pcm, s))
 
