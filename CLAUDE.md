@@ -256,6 +256,43 @@ install torch (CUDA wheel index per `-CudaVersion`) → install
 Flags: `-InstallDir`, `-GpuSupport`, `-CudaVersion cu130|cu124|cpu`,
 `-FlashAttn`. See README.md for the full table.
 
+**Model pre-download filters.** The pre-download phase uses
+`huggingface_hub.snapshot_download` with explicit `allow_patterns`
+(and a defensive `ignore_patterns`) because HF repos routinely ship
+the same weights in many redundant formats. For
+`openai/whisper-large-v3` an unfiltered snapshot pulls ~24 GB:
+`model.safetensors` (3.09 GB, what transformers loads) plus
+`pytorch_model.bin` (3.09 GB, legacy), `flax_model.msgpack` (6.17 GB),
+`model.fp32-*.safetensors` (6.17 GB sharded fp32 variant),
+`pytorch_model.fp32-*.bin` (6.17 GB), plus their index JSONs.
+
+The whitelist exploits HF's two naming conventions to keep the filter
+**repo-format-agnostic** so it survives new precision/quant variants
+without code edits:
+  - **canonical sharded weights** use `model-NNNNN-of-NNNNN.safetensors`
+    (dash after `model`)
+  - **variants** use `model.fp32-…`, `model.fp16-…`, `model.fp8-…`,
+    `model.int4-…`, `model-gptq-…`, etc. (dot after `model` and/or
+    a variant token)
+
+Matching only `model.safetensors`, `model-*-of-*.safetensors`, and
+`model.safetensors.index.json` therefore captures every legitimate
+canonical weight in any HF repo and structurally excludes every
+precision / quant variant. The `ignore_patterns` (`*fp32*`, `*fp16*`,
+`*bf16*`, `*fp8*`, `*int8*`, `*int4*`, `*nf4*`, `*gptq*`, `*awq*`,
+`*mxfp*`) is belt-and-suspenders to catch variant **index JSONs** that
+the `*.json` whitelist line would otherwise sweep up.
+
+Kokoro needs a different whitelist because it ships `.pth` (PyTorch
+pickle) instead of safetensors — the filter there is `*.pth`,
+`voices/*.pt`, `config.json`. Skipping the repo's TTS-arena
+screenshots / sample WAVs / extra MD files.
+
+**Lazy fallback at runtime.** If a pattern is too tight and misses
+something a backend needs, `from_pretrained` will fetch the missing
+file lazily on first use — so a wrong filter is at worst a deferred
+download, never a broken install.
+
 ## Dependencies
 
 Core: `torch`, `transformers`, `accelerate`, `sentencepiece`,

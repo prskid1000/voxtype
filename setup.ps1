@@ -323,11 +323,40 @@ print(hit[1])
 Step "Pre-downloading default models"
 
 Write-Host "    Fetching STT default (openai/whisper-large-v3, ~3 GB)..." -ForegroundColor DarkGray
+# allow_patterns: whitelist of files transformers actually reads. We
+# exploit HF's two naming conventions: canonical sharded weights use
+# `model-00001-of-00008.safetensors` (dash after `model`), while
+# precision / quant variants use `model.fp32-…`, `model.fp16-…`,
+# `model.fp8-…`, `model.int4-…`, `model-gptq-…`, etc. (dot after
+# `model` and/or a variant token). Matching only `model.safetensors`
+# and `model-*-of-*.safetensors` structurally excludes EVERY variant
+# in any HF repo without us having to chase new precision/quant names
+# (fp8, mxfp4, nf4, awq, gptq, …). For openai/whisper-large-v3 this
+# leaves model.safetensors (3.09 GB) + small configs/tokenizer (~3 MB)
+# instead of ~24 GB across fp32 / pytorch.bin / flax / multi-precision.
 $rc_stt = & $voxPython -c @"
 import sys
 try:
     from huggingface_hub import snapshot_download
-    p = snapshot_download(repo_id='openai/whisper-large-v3')
+    p = snapshot_download(
+        repo_id='openai/whisper-large-v3',
+        allow_patterns=[
+            'model.safetensors',              # single-file weights
+            'model-*-of-*.safetensors',       # canonical sharded weights
+            'model.safetensors.index.json',   # shard index (canonical only)
+            '*.json',                         # configs, generation configs, tokenizer.json
+            '*.txt',                          # vocab.txt, merges.txt
+            '*.model',                        # sentencepiece tokenizers
+            '*.tiktoken',                     # tiktoken vocabs
+        ],
+        ignore_patterns=[
+            # Belt-and-suspenders: catch precision/quant variant index
+            # JSONs that *.json above would otherwise pick up.
+            '*fp32*', '*fp16*', '*bf16*', '*fp8*',
+            '*int8*', '*int4*', '*nf4*',
+            '*gptq*', '*awq*', '*mxfp*',
+        ],
+    )
     print('STT cached at', p)
 except Exception as e:
     print('STT download skipped:', e, file=sys.stderr)
@@ -340,11 +369,24 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 Write-Host "    Fetching TTS default (hexgrad/Kokoro-82M, ~327 MB)..." -ForegroundColor DarkGray
+# allow_patterns: Kokoro ships .pth (PyTorch pickle), not safetensors,
+# so we can't reuse the Whisper whitelist. The kokoro PyPI library only
+# reads three things from the repo: the main checkpoint, the per-voice
+# embeddings, and the config. The rest (TTS-arena screenshots, demo
+# WAVs, DONATE.md / EVAL.md / SAMPLES.md / VOICES.md) is metadata for
+# the HF model page — never loaded at runtime.
 $rc_tts = & $voxPython -c @"
 import sys
 try:
     from huggingface_hub import snapshot_download
-    p = snapshot_download(repo_id='hexgrad/Kokoro-82M')
+    p = snapshot_download(
+        repo_id='hexgrad/Kokoro-82M',
+        allow_patterns=[
+            '*.pth',          # main model checkpoint (kokoro-v1_0.pth)
+            'voices/*.pt',    # 54 per-voice style embeddings
+            'config.json',    # model config
+        ],
+    )
     print('TTS cached at', p)
 except Exception as e:
     print('TTS download skipped:', e, file=sys.stderr)
