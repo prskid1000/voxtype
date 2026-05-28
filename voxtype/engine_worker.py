@@ -129,7 +129,7 @@ class _Model:
 
 def _default_model(modality: str) -> str:
     if modality == "stt":
-        return "openai/whisper-base"
+        return "openai/whisper-large-v3"
     return "hexgrad/Kokoro-82M"
 
 

@@ -1,10 +1,10 @@
 {
   "_comment": "Curated model aliases — friendly names → HF repo ids. Loaded by the model picker on Settings open. Add your own entries; the format is { stt|tts: [{name, model, family?, default_opts?}, …] }.",
   "stt": [
-    {"name": "Whisper Base (default)",       "model": "openai/whisper-base"},
+    {"name": "Whisper Base",                 "model": "openai/whisper-base"},
     {"name": "Whisper Small",                "model": "openai/whisper-small"},
     {"name": "Whisper Medium",               "model": "openai/whisper-medium"},
-    {"name": "Whisper Large v3",             "model": "openai/whisper-large-v3"},
+    {"name": "Whisper Large v3 (default)",   "model": "openai/whisper-large-v3"},
     {"name": "Whisper Large v3 Turbo",       "model": "openai/whisper-large-v3-turbo"},
     {"name": "Distil-Whisper Large v3",      "model": "distil-whisper/distil-large-v3"},
     {"name": "Distil-Whisper Medium",        "model": "distil-whisper/distil-medium.en"},

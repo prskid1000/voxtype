@@ -28,6 +28,13 @@ torch>=2.4
 transformers>=4.45
 huggingface_hub>=0.24
 
+# Direct-to-GPU weight loading: `from_pretrained(device_map=...,
+# low_cpu_mem_usage=True)` places weights straight on the target device
+# and skips the redundant CPU materialization + CPU->GPU copy, roughly
+# halving cold load time for large models (e.g. whisper-large-v3). Both
+# generic backends route loads through `_load_model()` which needs this.
+accelerate>=0.26
+
 # Required by SeamlessM4T / Speech2Text tokenizers.
 sentencepiece>=0.2
 

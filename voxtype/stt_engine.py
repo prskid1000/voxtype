@@ -21,7 +21,7 @@ from voxtype.engine_host import get_host
 log = logging.getLogger("voxtype.stt_engine")
 
 
-DEFAULT_MODEL = "openai/whisper-base"
+DEFAULT_MODEL = "openai/whisper-large-v3"
 LANGUAGES = WHISPER_LANGUAGES
 
 

@@ -183,6 +183,7 @@ Write-Host "    pip install remaining deps (PySide6, transformers, kokoro, …).
 
 if (-not (Test-Path "$voxVenv\Lib\site-packages\PySide6")) { Fail "VoxType UI pip install failed" }
 if (-not (Test-Path "$voxVenv\Lib\site-packages\transformers")) { Fail "transformers install failed (whisper backend)" }
+if (-not (Test-Path "$voxVenv\Lib\site-packages\accelerate")) { Fail "accelerate install failed (direct-to-GPU model loading)" }
 if (-not (Test-Path "$voxVenv\Lib\site-packages\kokoro")) { Fail "kokoro install failed (kokoro TTS backend)" }
 Ok "Core deps installed (UI + STT via whisper + TTS via kokoro, both on torch)"
 
@@ -279,7 +280,7 @@ print(hit[1])
             Warn "  1) Re-run setup with -CudaVersion cu124 (much broader Flash-Attn coverage)"
             Warn "  2) Pin torch to a stable version (2.5.1 / 2.6 / 2.7) and re-run -FlashAttn"
             Warn "  3) Build from source: requires CUDA toolkit + MSVC, ~30 min"
-            Warn "     `& '$voxVenv\Scripts\pip.exe' install flash-attn --no-build-isolation`"
+            Warn "     & '$voxVenv\Scripts\pip.exe' install flash-attn --no-build-isolation"
             Warn "  4) Leave Settings -> Attention on 'auto' (sdpa is already fast on Ampere+)"
             Warn "Browse the wheel repos manually if you want to download one yourself:"
             Warn "  https://github.com/mjun0812/flash-attention-prebuild-wheels/releases"
@@ -312,7 +313,7 @@ print(hit[1])
 
 # ─── Pre-download default models (idempotent) ────────────────────────
 #
-# STT: openai/whisper-base (~145 MB).
+# STT: openai/whisper-large-v3 (~3 GB).
 # TTS: hexgrad/Kokoro-82M  (~327 MB).
 #
 # snapshot_download skips files already in the HF cache, so re-runs
@@ -321,19 +322,19 @@ print(hit[1])
 
 Step "Pre-downloading default models"
 
-Write-Host "    Fetching STT default (openai/whisper-base, ~145 MB)..." -ForegroundColor DarkGray
+Write-Host "    Fetching STT default (openai/whisper-large-v3, ~3 GB)..." -ForegroundColor DarkGray
 $rc_stt = & $voxPython -c @"
 import sys
 try:
     from huggingface_hub import snapshot_download
-    p = snapshot_download(repo_id='openai/whisper-base')
+    p = snapshot_download(repo_id='openai/whisper-large-v3')
     print('STT cached at', p)
 except Exception as e:
     print('STT download skipped:', e, file=sys.stderr)
     sys.exit(1)
 "@ 2>&1
 if ($LASTEXITCODE -eq 0) {
-    Ok "STT default cached (whisper-base, ~145 MB)"
+    Ok "STT default cached (whisper-large-v3, ~3 GB)"
 } else {
     Warn "STT model pre-download failed (will download lazily on first use): $rc_stt"
 }
@@ -430,7 +431,7 @@ Write-Host @"
   Press Ctrl+Win to dictate into any app.
 
   STT and TTS run in-process via PyTorch.
-    - STT: openai/whisper-base by default (any HF Whisper repo works).
+    - STT: openai/whisper-large-v3 by default (any HF Whisper repo works).
     - TTS: hexgrad/Kokoro-82M by default — 54 voices across 9 language
       families. Voice names are strings like af_heart, jm_kumo, etc.
 

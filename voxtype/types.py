@@ -85,7 +85,7 @@ class AppSettings:
     stt_enabled: bool = True
     stt_auto_start: bool = True
     stt_idle_unload_sec: int = 300
-    stt_model_path: str = "openai/whisper-base"
+    stt_model_path: str = "openai/whisper-large-v3"
     stt_device: TorchDevice = "cpu"
     stt_language: str = "en"
     stt_dtype: TorchDtype = "auto"

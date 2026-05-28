@@ -60,6 +60,33 @@ class _BaseTTSHandler:
             return {"attn_implementation": self._attn_impl}
         return {}
 
+    @staticmethod
+    def _local_first(loader, *args, **kwargs):
+        """Load from the HF cache with no network first — skips the
+        per-load ETag/HEAD request for an already-cached model. Falls
+        back to an online load (may download) if not cached yet."""
+        try:
+            return loader(*args, local_files_only=True, **kwargs)
+        except Exception:
+            return loader(*args, **kwargs)
+
+    def _load_model(self, loader, model_id, **extra):
+        """Load an HF model straight onto the target device via accelerate
+        `device_map` + `low_cpu_mem_usage`, skipping the CPU->GPU copy.
+        Falls back to the plain load + `.to()` if device_map is
+        unsupported for the arch."""
+        kw = dict(self._attn_kwargs())
+        kw.update(extra)
+        kw["low_cpu_mem_usage"] = True
+        if self._torch_device == "cuda":
+            try:
+                return self._local_first(
+                    loader, model_id, device_map="cuda", **kw)
+            except Exception as exc:
+                log.warning("%s: device_map load failed (%s); plain load",
+                            self.family, exc)
+        return self._local_first(loader, model_id, **kw).to(self._torch_device)
+
     def _seed_rng(self, opts: dict[str, Any]) -> None:
         """Apply the per-call `seed` opt (or universal seed via engine).
         Called at the top of each synth() before sampling."""
@@ -219,10 +246,8 @@ class _VitsHandler(_BaseTTSHandler):
     def load(self, cfg: TTSLoadConfig) -> None:
         from transformers import VitsModel, AutoTokenizer
         self._resolve_device(cfg)
-        self._processor = AutoTokenizer.from_pretrained(cfg.model_id)
-        self._model = VitsModel.from_pretrained(
-            cfg.model_id, **self._attn_kwargs(),
-        ).to(self._torch_device)
+        self._processor = self._local_first(AutoTokenizer.from_pretrained, cfg.model_id)
+        self._model = self._load_model(VitsModel.from_pretrained, cfg.model_id)
         self._model.eval()
         # VITS exposes the SR via model.config.sampling_rate
         try:
@@ -293,13 +318,11 @@ class _SpeechT5Handler(_BaseTTSHandler):
             SpeechT5ForTextToSpeech, SpeechT5Processor, SpeechT5HifiGan,
         )
         self._resolve_device(cfg)
-        self._processor = SpeechT5Processor.from_pretrained(cfg.model_id)
-        self._model = SpeechT5ForTextToSpeech.from_pretrained(
-            cfg.model_id, **self._attn_kwargs(),
-        ).to(self._torch_device)
-        self._vocoder = SpeechT5HifiGan.from_pretrained(
-            "microsoft/speecht5_hifigan",
-        ).to(self._torch_device)
+        self._processor = self._local_first(SpeechT5Processor.from_pretrained, cfg.model_id)
+        self._model = self._load_model(
+            SpeechT5ForTextToSpeech.from_pretrained, cfg.model_id)
+        self._vocoder = self._load_model(
+            SpeechT5HifiGan.from_pretrained, "microsoft/speecht5_hifigan")
         self._model.eval(); self._vocoder.eval()
 
     def _resolve_embedding(self, spec: str):
@@ -384,10 +407,8 @@ class _BarkHandler(_BaseTTSHandler):
     def load(self, cfg: TTSLoadConfig) -> None:
         from transformers import BarkModel, AutoProcessor
         self._resolve_device(cfg)
-        self._processor = AutoProcessor.from_pretrained(cfg.model_id)
-        self._model = BarkModel.from_pretrained(
-            cfg.model_id, **self._attn_kwargs(),
-        ).to(self._torch_device)
+        self._processor = self._local_first(AutoProcessor.from_pretrained, cfg.model_id)
+        self._model = self._load_model(BarkModel.from_pretrained, cfg.model_id)
         self._model.eval()
         try:
             self.sample_rate = int(self._model.generation_config.sample_rate)
@@ -456,10 +477,9 @@ class _ParlerHandler(_BaseTTSHandler):
         from parler_tts import ParlerTTSForConditionalGeneration
         from transformers import AutoTokenizer
         self._resolve_device(cfg)
-        self._tokenizer = AutoTokenizer.from_pretrained(cfg.model_id)
-        self._model = ParlerTTSForConditionalGeneration.from_pretrained(
-            cfg.model_id, **self._attn_kwargs(),
-        ).to(self._torch_device)
+        self._tokenizer = self._local_first(AutoTokenizer.from_pretrained, cfg.model_id)
+        self._model = self._load_model(
+            ParlerTTSForConditionalGeneration.from_pretrained, cfg.model_id)
         self._model.eval()
         try:
             self.sample_rate = int(self._model.config.sampling_rate)
@@ -654,10 +674,8 @@ class _CSMHandler(_BaseTTSHandler):
         self._resolve_device(cfg)
         self._processor = AutoProcessor.from_pretrained(
             cfg.model_id, trust_remote_code=True)
-        self._model = ModelCls.from_pretrained(
-            cfg.model_id, trust_remote_code=True,
-            **self._attn_kwargs(),
-        ).to(self._torch_device)
+        self._model = self._load_model(
+            ModelCls.from_pretrained, cfg.model_id, trust_remote_code=True)
         self._model.eval()
         try:
             self.sample_rate = int(self._model.config.audio_sampling_rate)
@@ -709,10 +727,8 @@ class _HiggsHandler(_BaseTTSHandler):
         self._resolve_device(cfg)
         self._processor = AutoProcessor.from_pretrained(
             cfg.model_id, trust_remote_code=True)
-        self._model = AutoModelForCausalLM.from_pretrained(
-            cfg.model_id, trust_remote_code=True,
-            **self._attn_kwargs(),
-        ).to(self._torch_device)
+        self._model = self._load_model(
+            AutoModelForCausalLM.from_pretrained, cfg.model_id, trust_remote_code=True)
         self._model.eval()
 
     def synth(self, text: str, voice: str,

@@ -88,6 +88,35 @@ class _BaseHandler:
         # "auto" → let transformers pick (sdpa on recent versions).
         return kw
 
+    @staticmethod
+    def _local_first(loader, *args, **kwargs):
+        """Load from the HF cache with no network first — skips the
+        per-load ETag/HEAD request transformers otherwise makes to check
+        for updates, which is pure latency for an already-cached model.
+        Falls back to an online load (may download) if the model isn't
+        cached yet."""
+        try:
+            return loader(*args, local_files_only=True, **kwargs)
+        except Exception:
+            return loader(*args, **kwargs)
+
+    def _load_model(self, loader, model_id, **extra):
+        """Load an HF model straight onto the target device via accelerate
+        `device_map` + `low_cpu_mem_usage`, skipping the CPU->GPU copy that
+        a plain `from_pretrained(...).to(cuda)` incurs. Falls back to the
+        plain load + `.to()` if device_map is unsupported for the arch."""
+        kw = self._from_pretrained_kwargs()
+        kw.update(extra)
+        kw["low_cpu_mem_usage"] = True
+        if self._torch_device == "cuda":
+            try:
+                return self._local_first(
+                    loader, model_id, device_map="cuda", **kw)
+            except Exception as exc:
+                log.warning("%s: device_map load failed (%s); plain load",
+                            self.family, exc)
+        return self._local_first(loader, model_id, **kw).to(self._torch_device)
+
     def load(self, cfg: LoadConfig) -> None:  # pragma: no cover — abstract
         raise NotImplementedError
 
@@ -113,10 +142,9 @@ class _WhisperHandler(_BaseHandler):
         import torch
         from transformers import WhisperForConditionalGeneration, AutoProcessor
         self._resolve_device(cfg)
-        self._processor = AutoProcessor.from_pretrained(cfg.model_id)
-        self._model = WhisperForConditionalGeneration.from_pretrained(
-            cfg.model_id, **self._from_pretrained_kwargs(),
-        ).to(self._torch_device)
+        self._processor = self._local_first(AutoProcessor.from_pretrained, cfg.model_id)
+        self._model = self._load_model(
+            WhisperForConditionalGeneration.from_pretrained, cfg.model_id)
         self._model.eval()
         if cfg.torch_compile:
             try:
@@ -124,9 +152,16 @@ class _WhisperHandler(_BaseHandler):
             except Exception as exc:
                 log.warning("whisper: torch.compile failed (%s)", exc)
         if cfg.warmup:
+            # Minimal forward pass: triggers lazy CUDA-kernel / cuDNN
+            # autotuning (the real win) without a full 440-token decode.
             try:
                 dummy = np.zeros(16000, dtype=np.float32)
-                self.transcribe(dummy, {"language": "en"})
+                inputs = self._processor(
+                    dummy, sampling_rate=16000, return_tensors="pt")
+                feats = inputs.input_features.to(
+                    self._torch_device, dtype=self._torch_dtype)
+                with torch.no_grad():
+                    self._model.generate(feats, max_new_tokens=1)
             except Exception as exc:
                 log.warning("whisper warmup failed: %s", exc)
 
@@ -177,10 +212,9 @@ class _Wav2Vec2Handler(_BaseHandler):
         import torch
         from transformers import AutoModelForCTC, AutoProcessor
         self._resolve_device(cfg)
-        self._processor = AutoProcessor.from_pretrained(cfg.model_id)
-        self._model = AutoModelForCTC.from_pretrained(
-            cfg.model_id, **self._from_pretrained_kwargs(),
-        ).to(self._torch_device)
+        self._processor = self._local_first(AutoProcessor.from_pretrained, cfg.model_id)
+        self._model = self._load_model(
+            AutoModelForCTC.from_pretrained, cfg.model_id)
         self._model.eval()
         if cfg.torch_compile:
             try:
@@ -242,10 +276,10 @@ class _MMSHandler(_Wav2Vec2Handler):
         self._processor = AutoProcessor.from_pretrained(
             self._model_id, target_lang=lang3,
         )
-        self._model = Wav2Vec2ForCTC.from_pretrained(
-            self._model_id, target_lang=lang3, ignore_mismatched_sizes=True,
-            **self._from_pretrained_kwargs(),
-        ).to(self._torch_device)
+        self._model = self._load_model(
+            Wav2Vec2ForCTC.from_pretrained, self._model_id,
+            target_lang=lang3, ignore_mismatched_sizes=True,
+        )
         self._model.load_adapter(lang3)
         self._model.eval()
         self._loaded_lang = lang3
@@ -261,11 +295,10 @@ class _SeamlessHandler(_BaseHandler):
     def load(self, cfg: LoadConfig) -> None:
         from transformers import AutoProcessor, SeamlessM4Tv2ForSpeechToText
         self._resolve_device(cfg)
-        self._processor = AutoProcessor.from_pretrained(cfg.model_id)
+        self._processor = self._local_first(AutoProcessor.from_pretrained, cfg.model_id)
         # Note: SeamlessM4Tv2 covers both v1 and v2 — single class.
-        self._model = SeamlessM4Tv2ForSpeechToText.from_pretrained(
-            cfg.model_id, **self._from_pretrained_kwargs(),
-        ).to(self._torch_device)
+        self._model = self._load_model(
+            SeamlessM4Tv2ForSpeechToText.from_pretrained, cfg.model_id)
         self._model.eval()
 
     def transcribe(self, audio: np.ndarray, opts: dict[str, Any]) -> str:
@@ -300,10 +333,9 @@ class _MoonshineHandler(_BaseHandler):
     def load(self, cfg: LoadConfig) -> None:
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
         self._resolve_device(cfg)
-        self._processor = AutoProcessor.from_pretrained(cfg.model_id)
-        self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
-            cfg.model_id, **self._from_pretrained_kwargs(),
-        ).to(self._torch_device)
+        self._processor = self._local_first(AutoProcessor.from_pretrained, cfg.model_id)
+        self._model = self._load_model(
+            AutoModelForSpeechSeq2Seq.from_pretrained, cfg.model_id)
         self._model.eval()
 
     def transcribe(self, audio: np.ndarray, opts: dict[str, Any]) -> str:
@@ -329,10 +361,9 @@ class _S2THandler(_BaseHandler):
             Speech2TextForConditionalGeneration, Speech2TextProcessor,
         )
         self._resolve_device(cfg)
-        self._processor = Speech2TextProcessor.from_pretrained(cfg.model_id)
-        self._model = Speech2TextForConditionalGeneration.from_pretrained(
-            cfg.model_id, **self._from_pretrained_kwargs(),
-        ).to(self._torch_device)
+        self._processor = self._local_first(Speech2TextProcessor.from_pretrained, cfg.model_id)
+        self._model = self._load_model(
+            Speech2TextForConditionalGeneration.from_pretrained, cfg.model_id)
         self._model.eval()
 
     def transcribe(self, audio: np.ndarray, opts: dict[str, Any]) -> str:
@@ -377,10 +408,8 @@ class _PromptedASRHandler(_BaseHandler):
             cfg.model_id, trust_remote_code=True,
         )
         cls = self._resolve_model_cls()
-        self._model = cls.from_pretrained(
-            cfg.model_id, trust_remote_code=True,
-            **self._from_pretrained_kwargs(),
-        ).to(self._torch_device)
+        self._model = self._load_model(
+            cls.from_pretrained, cfg.model_id, trust_remote_code=True)
         self._model.eval()
 
     def transcribe(self, audio: np.ndarray, opts: dict[str, Any]) -> str:
@@ -497,7 +526,7 @@ _HANDLERS: dict[str, type[_BaseHandler]] = {
 class GenericSTTBackend(STTBackend):
     """One backend to rule them all."""
     name = "generic"
-    default_model = "openai/whisper-base"
+    default_model = "openai/whisper-large-v3"
     priority = 0   # universal fallback; specialists outrank if needed
 
     def __init__(self) -> None:

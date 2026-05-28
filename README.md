@@ -16,8 +16,8 @@ An embedded aiohttp server exposes both engines on a single
 OpenAI-compatible port (default `:6600`) so external clients can
 call `/v1/audio/transcriptions` and `/v1/audio/speech`.
 
-**Default models** (~475 MB total disk):
-- **STT**: `openai/whisper-base` — 99 languages, ~145 MB
+**Default models** (~3.3 GB total disk):
+- **STT**: `openai/whisper-large-v3` — 99 languages, ~3 GB
 - **TTS**: `hexgrad/Kokoro-82M` — 54 voices in 9 language families, ~327 MB
 
 Sibling project of [telecode](https://github.com/prskid1000/telecode).
@@ -103,8 +103,9 @@ cd "$env:USERPROFILE\.voxtype"
 1. Verify **Python 3.10+**, **git**, **ffmpeg** (optional), GPU support
 2. Create `voxtype-venv/` and install:
    - `torch` (CUDA 13 nightly wheel if `-GpuSupport`, CPU wheel otherwise)
-   - `transformers`, `sentencepiece`, `datasets` (covers every HF
-     family in the tables above)
+   - `transformers`, `accelerate`, `sentencepiece`, `datasets` (covers
+     every HF family in the tables above; `accelerate` enables
+     direct-to-GPU weight loading for faster cold starts)
    - `kokoro` (the one TTS family that uses a non-HF loader)
    - PySide6 / pynput / sounddevice / soundfile / aiohttp / numpy /
      pywin32 / Pillow / mss
@@ -294,7 +295,7 @@ knobs go in the opts bags.
 @dataclass
 class AppSettings:
     # ── Universal STT (every family honours these) ──────────────────
-    stt_model_path:    str = "openai/whisper-base"
+    stt_model_path:    str = "openai/whisper-large-v3"
     stt_device:        str = "cpu"           # cpu | cuda
     stt_language:      str = "en"            # multilingual families
     stt_dtype:         str = "auto"          # auto|fp32|fp16|bf16

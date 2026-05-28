@@ -258,12 +258,24 @@ Flags: `-InstallDir`, `-GpuSupport`, `-CudaVersion cu130|cu124|cpu`,
 
 ## Dependencies
 
-Core: `torch`, `transformers`, `sentencepiece`, `datasets`,
-`huggingface_hub`, `kokoro` (the one TTS family with a non-HF
-loader), `PySide6`, `pynput`, `sounddevice`, `soundfile`, `aiohttp`,
-`numpy`, `Pillow`, `mss`, `pywin32`. Optional family deps
+Core: `torch`, `transformers`, `accelerate`, `sentencepiece`,
+`datasets`, `huggingface_hub`, `kokoro` (the one TTS family with a
+non-HF loader), `PySide6`, `pynput`, `sounddevice`, `soundfile`,
+`aiohttp`, `numpy`, `Pillow`, `mss`, `pywin32`. Optional family deps
 (`parler-tts`, `phonemizer`, `espeak-ng`) fall through to the
 pipeline fallback when missing.
+
+**Load-time path.** Both generic backends route every HF model load
+through `_load_model()` (in their `_BaseHandler`), which loads
+straight onto the target device via accelerate `device_map="cuda"` +
+`low_cpu_mem_usage=True` — skipping the redundant CPU materialization
+and CPU->GPU copy a plain `from_pretrained(...).to(cuda)` does. It
+falls back to the plain load + `.to()` if device_map is unsupported
+for the arch. Loads also go through `_local_first()` which tries the
+HF cache with `local_files_only=True` first to skip the per-load
+network ETag check. Warmup runs a 1-token generate (just enough to
+trigger lazy CUDA-kernel/cuDNN autotuning) instead of a full decode.
+Kokoro loads via its own `KPipeline`, so it bypasses `_load_model`.
 
 ## Testing the running app
 
