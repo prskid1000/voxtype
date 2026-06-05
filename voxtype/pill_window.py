@@ -12,7 +12,9 @@ every non-idle state has its own glyph + animation:
   error      → red jolt bolt
 
 Draggable (position persisted to settings). Tray can hide the pill
-entirely via `hide_for_session()` + `show_from_session()`.
+entirely via `hide_for_session()` + `show_from_session()`, or switch
+it to "active only" via `set_active_only()` so the idle orb stays
+hidden and the pill only surfaces during non-idle states.
 """
 from __future__ import annotations
 
@@ -81,6 +83,9 @@ class PillWindow(QWidget):
         self._message: str = ""
         self._drag_pos: QPoint | None = None
         self._force_hidden = False
+        # "Active only": keep the pill hidden while idle, reveal it only
+        # for non-idle states. Seeded from settings; toggled from the tray.
+        self._active_only = bool(config.load().pill_active_only)
         # Optional source of live audio levels (oldest → newest, each in
         # [0, 1]). Wired by the orchestrator to Recorder.levels so the
         # waveform reflects the actual mic instead of a sine wave.
@@ -93,7 +98,7 @@ class PillWindow(QWidget):
         self._tick.start()
 
         self._place()
-        self.show()
+        self._apply_visibility()
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -110,10 +115,22 @@ class PillWindow(QWidget):
             new_rect = self.frameGeometry()
             new_rect.moveCenter(old_center)
             self.move(new_rect.topLeft())
-        if not self._force_hidden:
+        self._apply_visibility()
+        self.update()
+
+    def _should_be_visible(self) -> bool:
+        if self._force_hidden:
+            return False
+        if self._active_only and self._state == "idle":
+            return False
+        return True
+
+    def _apply_visibility(self) -> None:
+        if self._should_be_visible():
             self.show()
             self.raise_()
-        self.update()
+        else:
+            self.hide()
 
     def _resize_for_state(self, state: PillState) -> None:
         if state == "recording":
@@ -136,8 +153,13 @@ class PillWindow(QWidget):
 
     def show_from_session(self) -> None:
         self._force_hidden = False
-        self.show()
-        self.raise_()
+        self._apply_visibility()
+
+    def set_active_only(self, enabled: bool) -> None:
+        """Toggle "active only" mode: hide the idle orb, show the pill
+        only during non-idle states. Applies immediately."""
+        self._active_only = bool(enabled)
+        self._apply_visibility()
 
     # ── Dragging ─────────────────────────────────────────────────────
 

@@ -64,6 +64,9 @@ class AppSettings:
     pill_x: int = -1
     pill_y: int = -1
     pill_hidden: bool = False
+    # When True the pill is hidden while idle and only appears during
+    # active states (recording / processing / enhancing / typing / error).
+    pill_active_only: bool = False
 
     # ── Embedded HTTP server ─────────────────────────────────────────
     server_enabled: bool = True

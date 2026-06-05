@@ -44,7 +44,8 @@ class Tray:
                  on_proxy_ping: Callable[[], None],
                  on_pill_reset: Callable[[], None] | None = None,
                  on_pill_hide:  Callable[[], None] | None = None,
-                 on_pill_show:  Callable[[], None] | None = None) -> None:
+                 on_pill_show:  Callable[[], None] | None = None,
+                 on_pill_active_only: Callable[[bool], None] | None = None) -> None:
         self._on_toggle_window = on_toggle_window
         self._on_quit = on_quit
         self._on_restart_service = on_restart_service
@@ -54,6 +55,7 @@ class Tray:
         self._on_pill_reset = on_pill_reset
         self._on_pill_hide  = on_pill_hide
         self._on_pill_show  = on_pill_show
+        self._on_pill_active_only = on_pill_active_only
 
         self.tray = QSystemTrayIcon(make_icon())
         self.tray.setToolTip("VoxType")
@@ -111,6 +113,14 @@ class Tray:
         reset_pos = QAction("Reset Position", self._pill_menu)
         reset_pos.triggered.connect(lambda: self._on_pill_reset and self._on_pill_reset())
         self._pill_menu.addAction(reset_pos)
+        self._pill_menu.addSeparator()
+        # Active-only: hide the idle orb, surface the pill only while
+        # recording / processing / etc. Checkable, persisted to settings.
+        self._pill_active_only = QAction("Only Show When Active", self._pill_menu)
+        self._pill_active_only.setCheckable(True)
+        self._pill_active_only.setChecked(bool(config.load().pill_active_only))
+        self._pill_active_only.toggled.connect(self._on_pill_active_only_toggle)
+        self._pill_menu.addAction(self._pill_active_only)
         # Seed from settings so a restart remembers the last hide/show.
         self._pill_is_hidden = bool(config.load().pill_hidden)
         self._pill_hide_show.setText("Show Pill" if self._pill_is_hidden else "Hide Pill")
@@ -170,6 +180,11 @@ class Tray:
             self._pill_is_hidden = True
             self._pill_hide_show.setText("Show Pill")
         config.patch("pill_hidden", self._pill_is_hidden)
+
+    def _on_pill_active_only_toggle(self, checked: bool) -> None:
+        config.patch("pill_active_only", bool(checked))
+        if self._on_pill_active_only:
+            self._on_pill_active_only(bool(checked))
 
     def _refresh(self) -> None:
         settings = config.load()

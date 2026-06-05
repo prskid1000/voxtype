@@ -126,6 +126,7 @@ class Orchestrator(QObject):
             on_pill_reset=self.pill.reset_position,
             on_pill_hide=self.pill.hide_for_session,
             on_pill_show=self.pill.show_from_session,
+            on_pill_active_only=self.pill.set_active_only,
         )
 
         # Hotkey

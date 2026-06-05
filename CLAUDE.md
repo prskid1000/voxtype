@@ -177,6 +177,7 @@ class AppSettings:
 
     # Pill UI / HTTP server
     pill_x: int = -1; pill_y: int = -1; pill_hidden: bool = False
+    pill_active_only: bool = False   # hide idle orb; show only when active
     server_enabled: bool = True; server_port: int = 6600
 
     # Universal STT (every family honours these)
