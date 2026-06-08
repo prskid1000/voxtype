@@ -429,6 +429,43 @@ def _build_dictation(window) -> QWidget:
 
     layout.addWidget(card)
 
+    # ── Voice Activation card ──────────────────────────────────────
+    va_card, va_body = _card("Voice Activation",
+        "Start dictating hands-free when you say a start word")
+
+    cb_voice = _checkbox("voice_activation_enabled", "Enabled")
+    le_words = _line_edit("voice_start_words")
+    le_words.setPlaceholderText("computer, hey vox")
+    le_words.setEnabled(cb_voice.isChecked())
+
+    def _on_voice_toggle(enabled: bool) -> None:
+        # _checkbox already patched the setting; also (re)start the live
+        # listener and gate the words field.
+        le_words.setEnabled(enabled)
+        try:
+            window.set_voice_activation(enabled)
+        except Exception as exc:
+            log.warning("set_voice_activation failed: %s", exc)
+    cb_voice.toggled.connect(_on_voice_toggle)
+
+    va_body.addWidget(_row(_label("Voice Activation",
+        "Listen continuously and begin recording when you speak a start "
+        "word. The mic and STT model stay active while listening, and "
+        "voice-triggered captures auto-stop on silence. The hotkey still "
+        "works as usual."),
+        cb_voice))
+    va_body.addWidget(_row(_label("Start Words",
+        "Comma-separated trigger phrases. A short utterance that begins "
+        "with any of these starts a dictation; the start word itself is "
+        "not transcribed into your text."),
+        le_words))
+    va_body.addWidget(_row(_label("Match Anywhere",
+        "Off (default): the utterance must START with a start word. On: "
+        "trigger if a start word appears anywhere in the utterance."),
+        _checkbox("voice_match_contains", "Enabled")))
+
+    layout.addWidget(va_card)
+
     # ── Recording Sounds card ──────────────────────────────────────
     sound_card, sound_body = _card("Recording Sounds",
         "Audio cues for record / stop / done")
@@ -1929,7 +1966,8 @@ class SettingsWindow(QMainWindow):
                  start_server: Callable[[], None] | None = None,
                  stop_server: Callable[[], None] | None = None,
                  capture_hotkey: Callable[[Callable], None] | None = None,
-                 set_hotkey: Callable[[object], None] | None = None) -> None:
+                 set_hotkey: Callable[[object], None] | None = None,
+                 set_voice_activation: Callable[[bool], None] | None = None) -> None:
         super().__init__()
         self._restart_service = restart_service
         self._start_service = start_service
@@ -1939,6 +1977,7 @@ class SettingsWindow(QMainWindow):
         self._stop_server = stop_server
         self._capture_hotkey = capture_hotkey
         self._set_hotkey = set_hotkey
+        self._set_voice_activation = set_voice_activation
         self.setWindowTitle("VoxType")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
@@ -2009,6 +2048,10 @@ class SettingsWindow(QMainWindow):
     def set_hotkey(self, combo) -> None:
         if self._set_hotkey:
             self._set_hotkey(combo)
+
+    def set_voice_activation(self, enabled: bool) -> None:
+        if self._set_voice_activation:
+            self._set_voice_activation(bool(enabled))
 
     def toggle(self) -> None:
         if self.isVisible():

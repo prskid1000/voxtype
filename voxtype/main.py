@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QApplication
 
 from voxtype import config, debug_log, process, stt, llm, server, sounds, stt_engine, tts_engine
 from voxtype.audio import Recorder
+from voxtype.wake_listener import WakeListener, matches_start_word
 from voxtype.hotkey import HotkeyListener
 from voxtype.pill_window import PillWindow
 from voxtype.settings_window import SettingsWindow
@@ -77,6 +78,7 @@ class _AsyncLoopThread:
 class Orchestrator(QObject):
     pill_state_req  = Signal(str, str)    # state, message — cross-thread
     flash_error_req = Signal(str, int)    # message, dwell_ms — cross-thread
+    wake_trigger_req = Signal()           # wake word matched — cross-thread
 
     def __init__(self, app: QApplication, loop: _AsyncLoopThread) -> None:
         super().__init__()
@@ -99,11 +101,15 @@ class Orchestrator(QObject):
         self._pipeline_gate = False
 
         self.recorder = Recorder()
+        # Always-on "start words" listener. Started lazily by
+        # _set_voice_activation() only when the feature is enabled.
+        self.wake = WakeListener(on_utterance=self._on_wake_utterance)
 
         self.pill = PillWindow()
         self.pill.level_provider = self.recorder.levels
         self.pill_state_req.connect(self._apply_pill_state)
         self.flash_error_req.connect(self._apply_flash_error)
+        self.wake_trigger_req.connect(self._begin_voice_dictation)
 
         self.window = SettingsWindow(
             restart_service=self._restart_service,
@@ -114,6 +120,7 @@ class Orchestrator(QObject):
             restart_server=self._restart_server,
             capture_hotkey=self._capture_hotkey,
             set_hotkey=self._apply_hotkey,
+            set_voice_activation=self._set_voice_activation,
         )
 
         self.tray = Tray(
@@ -138,6 +145,9 @@ class Orchestrator(QObject):
         self.hotkey.set_mode(s.hotkey_mode)
         self.hotkey.set_combo(s.hotkey)
         self.hotkey.start()
+
+        # Voice activation ("start words") — off unless enabled in settings.
+        self._set_voice_activation(bool(s.voice_activation_enabled))
 
         # Boot: configure in-process engines, start the embedded HTTP
         # server. The engines lazy-load on first request unless
@@ -172,6 +182,14 @@ class Orchestrator(QObject):
         silence_dur = float(s.silence_duration_sec) if s.auto_stop_on_silence else 0.0
         log.info("hotkey down — start recording (silence auto-stop: %s)",
                  f"{silence_dur}s" if silence_dur else "off")
+        self._begin_capture(s, silence_dur)
+
+    def _begin_capture(self, s: AppSettings, silence_dur: float) -> None:
+        """Open the recorder + flip the pill to 'recording'. Shared by the
+        hotkey path and the voice-activation path. Pauses the wake listener
+        for the duration of the capture so only one input stream is ever
+        active and the listener can't re-trigger on the dictation audio."""
+        self.wake.pause()
         try:
             self.recorder.start(
                 silence_duration=silence_dur,
@@ -180,6 +198,7 @@ class Orchestrator(QObject):
         except Exception as exc:
             log.error("recorder failed to start: %s", exc)
             self._set_pill("error", "mic error")
+            self._resume_wake_if_idle()
             return
         self._recording_since = time.monotonic()
         self._set_pill("recording", "")
@@ -192,6 +211,70 @@ class Orchestrator(QObject):
         hotkey-up so toggle + hold modes both work."""
         log.info("silence auto-stop fired")
         self._on_hotkey_up()
+
+    # ── Voice activation ("start words") ─────────────────────────────
+
+    def _set_voice_activation(self, enabled: bool) -> None:
+        """Start/stop the always-on wake listener. Safe to call from the
+        Qt thread (settings checkbox / tray toggle) or at boot."""
+        try:
+            if enabled:
+                s = config.load()
+                self.wake.start(
+                    max_phrase_sec=float(getattr(s, "voice_max_phrase_sec", 2.5)))
+                # Warm STT now so the first start word triggers without a
+                # cold-load delay. It still idle-unloads during long silence.
+                if s.stt_enabled:
+                    self._loop.submit(self._ensure_stt_running())
+            else:
+                self.wake.stop()
+        except Exception as exc:
+            log.error("voice activation toggle failed: %s", exc)
+
+    def _resume_wake_if_idle(self) -> None:
+        """Re-arm the wake listener once a capture/pipeline has finished.
+        No-op if voice activation is off or a recording is in progress.
+        `wake.resume()` itself ignores the call unless the feature is on."""
+        if not self.recorder.recording:
+            self.wake.resume()
+
+    def _on_wake_utterance(self, pcm: bytes) -> None:
+        """Called on a worker thread by WakeListener for each candidate
+        wake phrase. Hand off to the async loop for transcription —
+        unless a manual recording or pipeline is already in flight."""
+        if self.recorder.recording or self._pipeline_busy():
+            return
+        self._loop.submit(self._check_wake(pcm))
+
+    async def _check_wake(self, pcm: bytes) -> None:
+        """Transcribe a candidate utterance and, if it matches a start
+        word, request a dictation capture on the Qt thread."""
+        s = config.load()
+        if not s.voice_activation_enabled:
+            return
+        try:
+            await self._ensure_stt_running()
+            process.mark_used("stt")
+            text = await stt.transcribe(pcm, language=s.stt_language)
+        except Exception as exc:
+            log.debug("wake transcribe failed: %s", exc)
+            return
+        if matches_start_word(text, s.voice_start_words,
+                              bool(getattr(s, "voice_match_contains", False))):
+            log.info("start word matched: %r", text[:80])
+            self.wake_trigger_req.emit()
+
+    @Slot()
+    def _begin_voice_dictation(self) -> None:
+        """Runs on the Qt thread. A start word fired — open a normal
+        dictation capture that always auto-stops on silence (there is no
+        hotkey release in hands-free mode)."""
+        if self.recorder.recording or self._pipeline_busy():
+            return
+        s = config.load()
+        silence_dur = float(s.silence_duration_sec) if s.silence_duration_sec > 0 else 1.5
+        log.info("voice dictation start (auto-stop %.1fs)", silence_dur)
+        self._begin_capture(s, silence_dur)
 
     def _on_hotkey_up(self) -> None:
         """Hotkey released — finalise capture + run the pipeline."""
@@ -215,6 +298,7 @@ class Orchestrator(QObject):
         if not pcm:
             self._pipeline_gate = False
             self._set_pill("idle", "")
+            self._resume_wake_if_idle()
             return
 
         # VAD
@@ -222,6 +306,7 @@ class Orchestrator(QObject):
             log.info("VAD rejected empty recording")
             self._pipeline_gate = False
             self._flash_error("No speech detected")
+            self._resume_wake_if_idle()
             return
 
         self._set_pill("processing", "")
@@ -233,6 +318,7 @@ class Orchestrator(QObject):
             await self._pipeline_inner(pcm, s)
         finally:
             self._pipeline_gate = False
+            self._resume_wake_if_idle()
 
     async def _pipeline_inner(self, pcm: bytes, s: AppSettings) -> None:
         t0 = time.monotonic()
@@ -454,6 +540,10 @@ class Orchestrator(QObject):
         log.info("quit requested")
         try:
             self.hotkey.stop()
+        except Exception:
+            pass
+        try:
+            self.wake.stop()
         except Exception:
             pass
         # Kick off async shutdown of sidecars + proxy

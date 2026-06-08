@@ -259,7 +259,8 @@ Quit VoxType
 Settings sections:
 
 - **Dictation** — hotkey mode, live **Rebind** button, auto-stop on
-  silence, VAD, append mode, save history, **Recording Sounds**
+  silence, VAD, append mode, save history, **Voice Activation** (start
+  words — see below), **Recording Sounds**
   (enable + start/stop/done cues — bundled 1-second WAVs ship in
   `voxtype/resources/sounds/`; Browse to override with any
   wav/flac/ogg/mp3)
@@ -368,6 +369,35 @@ Settings → Dictation to capture a new combo.
 
 `hotkey_mode` can be `"hold"` (dictate while held) or `"toggle"`
 (tap to start, tap to stop).
+
+---
+
+## Voice activation ("start words")
+
+Hands-free dictation: instead of pressing the hotkey, say a **start
+word** and VoxType begins recording. Off by default — enable it in
+**Settings → Dictation → Voice Activation**. The hotkey keeps working
+alongside it.
+
+How it works: while enabled, VoxType keeps the mic open and the STT
+model warm, segments your speech into short utterances, transcribes
+each, and starts a dictation when an utterance matches one of your
+configured **Start Words** (comma-separated, e.g. `computer, hey vox`).
+Voice-triggered captures always **auto-stop on silence** (there's no
+hotkey to release). Say the start word, pause briefly, then dictate.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `voice_activation_enabled` | `false` | Master on/off for the start-word listener. |
+| `voice_start_words` | `"computer"` | Comma-separated trigger phrases. |
+| `voice_match_contains` | `false` | `false` = utterance must START with a start word; `true` = match anywhere in the utterance. |
+| `voice_max_phrase_sec` | `2.5` | Utterances longer than this are ignored when scanning (wake phrases are short). |
+
+Trade-off: because detection reuses your STT model, the mic and model
+stay active while listening (the GPU context is freed again once you
+disable voice activation and STT idle-unloads). Every nearby short
+utterance gets transcribed to check for the start word, so pick a
+distinctive phrase to keep false triggers low.
 
 ---
 

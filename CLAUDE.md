@@ -193,10 +193,29 @@ class AppSettings:
     tts_warmup / tts_torch_compile / tts_stream / tts_attn_impl / tts_seed
     tts_opts: dict   # family-specific (e.g. {"style": "...", "speaker_embedding": "..."})
 
+    # Voice activation ("start words")
+    voice_activation_enabled / voice_start_words (comma-sep) /
+    voice_match_contains / voice_max_phrase_sec
+
     # LLM + history
     enhance_enabled / screen_context / proxy_url / proxy_model
     save_history
 ```
+
+**Voice activation.** When `voice_activation_enabled` is on, the GUI
+spawns `WakeListener` (`wake_listener.py`) — an always-on mic stream that
+energy-VAD-segments speech into short utterances (same `_SILENCE_RMS`
+floor as `audio.py`). Each candidate ≤ `voice_max_phrase_sec` is handed
+to `Orchestrator._on_wake_utterance` → `_check_wake`, which transcribes
+it via the existing STT engine and runs `matches_start_word()` against
+`voice_start_words`. On a match it emits `wake_trigger_req` →
+`_begin_voice_dictation` (Qt thread) → `_begin_capture`, reusing the
+whole hotkey pipeline with auto-stop-on-silence forced on. Only one input
+stream is ever active: `_begin_capture` calls `wake.pause()` (closes the
+listener stream) and the pipeline `finally` / hotkey-up early-returns call
+`_resume_wake_if_idle()`. The toggle lives only in Settings → Dictation
+(the `voice_activation_enabled` checkbox), which calls
+`_set_voice_activation` to start/stop the listener.
 
 `AppSettings.from_json()` migrates legacy keys (`stt_task` →
 `stt_opts.task`, `tts_speaker` → `tts_voice`, `tts_length_scale` →
