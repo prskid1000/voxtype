@@ -31,6 +31,7 @@ SECTIONS = [
     ("dictation", "Dictation",  "🎙"),
     ("services",  "Services",   "⚙"),
     ("llm",       "LLM",        "🧠"),
+    ("display",   "Display",    "🖥"),
     ("history",   "History",    "📜"),
     ("logs",      "Logs",       "📋"),
 ]
@@ -1593,6 +1594,99 @@ def _build_llm(window) -> QWidget:
     return scroll
 
 
+def _build_display(window) -> QWidget:
+    """Display section — currently just the OLED burn-in guard.
+
+    The user sets one knob (black flashes per second); the per-flash
+    duration is derived from the auto-detected refresh rate. Toggling
+    either control patches config then calls window.set_oled_guard() so
+    the live guard re-applies immediately (mirrors the voice-activation
+    plumbing)."""
+    from voxtype.oled_guard import primary_refresh_rate
+
+    scroll, _, layout = _page()
+    card, body = _card("OLED Burn-In Guard",
+                        "Flash a black frame to rest OLED pixels")
+
+    def _notify(*_args) -> None:
+        try:
+            window.set_oled_guard()
+        except Exception as exc:
+            log.warning("set_oled_guard failed: %s", exc)
+
+    cb = _checkbox("oled_guard_enabled", "Enabled")
+    cb.toggled.connect(_notify)
+
+    # Flashes/sec — discrete presets matching the spec's guide table.
+    # Stored as an int, so build the combo inline (the _combo helper
+    # compares string-typed itemData against the value).
+    rate = QComboBox()
+    cur = int(getattr(config.load(), "oled_flashes_per_sec", 2))
+    for val, lbl in [
+        (1, "1 / sec — very gentle, invisible"),
+        (2, "2 / sec — balanced (default)"),
+        (4, "4 / sec — aggressive"),
+        (6, "6 / sec — very aggressive, visible flicker"),
+    ]:
+        rate.addItem(lbl, val)
+    rate.setCurrentIndex(next((i for i in range(rate.count())
+                               if rate.itemData(i) == cur), 1))
+
+    def _on_rate(i: int) -> None:
+        config.patch("oled_flashes_per_sec", int(rate.itemData(i)))
+        _notify()
+    rate.currentIndexChanged.connect(_on_rate)
+
+    # Darkness — full black is the most noticeable. A translucent dim is
+    # far gentler. Stored 0.05–1.0; shown as a percentage.
+    from PySide6.QtWidgets import QSlider
+    dark = QWidget()
+    dl = QHBoxLayout(dark); dl.setContentsMargins(0, 0, 0, 0); dl.setSpacing(10)
+    cur_op = float(getattr(config.load(), "oled_flash_opacity", 1.0))
+    op_slider = QSlider(Qt.Orientation.Horizontal)
+    op_slider.setRange(10, 100)
+    op_slider.setValue(int(round(cur_op * 100)))
+    op_read = QLabel(f"{int(round(cur_op * 100))}%")
+    op_read.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; min-width: 52px;")
+
+    def _on_op(v: int) -> None:
+        op_read.setText(f"{v}%")
+        config.patch("oled_flash_opacity", round(v / 100.0, 2))
+        _notify()
+    op_slider.valueChanged.connect(_on_op)
+    dl.addWidget(op_slider, 1); dl.addWidget(op_read)
+
+    rr = primary_refresh_rate()
+    rr_lbl = QLabel(f"{rr:.0f} Hz  ·  ~{1000.0 / rr:.1f} ms per black frame")
+    rr_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+
+    body.addWidget(_row(_label("OLED Guard",
+        "Flash a fullscreen black frame a few times per second so OLED "
+        "pixels get a brief, regular rest. The frame never steals focus "
+        "or blocks clicks. Off by default — it is a mild, panel-dependent "
+        "flicker, not a guaranteed burn-in cure."),
+        cb))
+    body.addWidget(_row(_label("Black Flashes / sec",
+        "How often the black frame appears. Each flash lasts a single "
+        "display frame, so higher refresh rates flash less noticeably "
+        "while keeping the same rest cadence."),
+        rate))
+    body.addWidget(_row(_label("Flash Darkness",
+        "100% = full black (pixels fully off — maximum rest, most "
+        "noticeable). Lower values dim the screen instead of blacking it "
+        "out: gentler and far less visible, with proportionally less "
+        "pixel rest. Try ~40-60% if a full black flash is distracting."),
+        dark))
+    body.addWidget(_row(_label("Display Refresh",
+        "Auto-detected primary display. Multi-monitor setups are guarded "
+        "on the primary display only."),
+        rr_lbl))
+
+    layout.addWidget(card)
+    layout.addStretch(1)
+    return scroll
+
+
 def _build_history(window) -> QWidget:
     """Saved-transcript viewer. Lists newest-first; clicking an entry
     fills a preview pane with the raw + cleaned text and offers Copy +
@@ -1967,7 +2061,8 @@ class SettingsWindow(QMainWindow):
                  stop_server: Callable[[], None] | None = None,
                  capture_hotkey: Callable[[Callable], None] | None = None,
                  set_hotkey: Callable[[object], None] | None = None,
-                 set_voice_activation: Callable[[bool], None] | None = None) -> None:
+                 set_voice_activation: Callable[[bool], None] | None = None,
+                 set_oled_guard: Callable[[], None] | None = None) -> None:
         super().__init__()
         self._restart_service = restart_service
         self._start_service = start_service
@@ -1978,6 +2073,7 @@ class SettingsWindow(QMainWindow):
         self._capture_hotkey = capture_hotkey
         self._set_hotkey = set_hotkey
         self._set_voice_activation = set_voice_activation
+        self._set_oled_guard = set_oled_guard
         self.setWindowTitle("VoxType")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
@@ -2053,6 +2149,10 @@ class SettingsWindow(QMainWindow):
         if self._set_voice_activation:
             self._set_voice_activation(bool(enabled))
 
+    def set_oled_guard(self) -> None:
+        if self._set_oled_guard:
+            self._set_oled_guard()
+
     def toggle(self) -> None:
         if self.isVisible():
             self.hide()
@@ -2072,6 +2172,8 @@ class SettingsWindow(QMainWindow):
                 w = _build_services(self)
             elif sid == "llm":
                 w = _build_llm(self)
+            elif sid == "display":
+                w = _build_display(self)
             elif sid == "history":
                 w = _build_history(self)
             elif sid == "logs":

@@ -42,6 +42,7 @@ voxtype/
     ├── llm.py                    # OpenAI-shape POST to telecode
     ├── process.py                # Facade over engines for tray UI
     ├── qt_theme.py / tray_menu.py / pill_window.py / settings_window.py
+    ├── oled_guard.py             # Black-frame OLED burn-in flasher (Qt overlay)
     ├── resources/                # icon.png, system-prompt.md, models.json
     ├── data/                     # User state (gitignored)
     └── backends/
@@ -197,6 +198,9 @@ class AppSettings:
     voice_activation_enabled / voice_start_words (comma-sep) /
     voice_match_contains / voice_max_phrase_sec
 
+    # OLED burn-in guard
+    oled_guard_enabled / oled_flashes_per_sec / oled_flash_opacity
+
     # LLM + history
     enhance_enabled / screen_context / proxy_url / proxy_model
     save_history
@@ -216,6 +220,31 @@ listener stream) and the pipeline `finally` / hotkey-up early-returns call
 `_resume_wake_if_idle()`. The toggle lives only in Settings → Dictation
 (the `voice_activation_enabled` checkbox), which calls
 `_set_voice_activation` to start/stop the listener.
+
+**OLED burn-in guard.** `oled_guard.py` is a Qt-native re-implementation
+of a standalone black-frame flasher spec (the spec assumed tkinter +
+pystray + a busy-wait; none of that is used). `OledGuard` is a single
+`QWidget` reusing PillWindow's no-focus overlay flags **plus**
+`WindowTransparentForInput` / `WA_TransparentForMouseEvents` so the
+fullscreen black frame never steals focus or eats a click mid-dictation
+(the failure mode a plain topmost Tk window would cause). A `QTimer`
+fires every `1000 / oled_flashes_per_sec` ms; each tick shows the frame
+and a one-shot timer hides it after one display-refresh interval
+(`1000 / QScreen.refreshRate()`), so the cadence is constant across
+refresh rates and higher-Hz panels just flash more briefly. **Both
+timers are `Qt.PreciseTimer` and the active period is bracketed with
+`timeBeginPeriod(1)`/`timeEndPeriod(1)`** — without this a 4 ms hide
+fires at Windows' ~15.6 ms default tick, stretching the flash to 3-4
+frames and making it clearly visible even at 240 Hz (the symptom the
+user hit). `oled_flash_opacity` (1.0 = full black, lower = translucent
+dim via `setWindowOpacity`) trades pixel rest for subtlety. No torch, no
+extra thread — the Orchestrator owns the instance and `OledGuard.apply()`
+runs Qt-thread-only. Both the tray submenu (◳ OLED Guard: enable + 1/2/4/6
+preset group) and the Display settings page patch config then route
+through `Orchestrator._apply_oled` (tray `on_oled_changed`, settings
+`set_oled_guard`) so the live guard re-applies immediately, exactly like
+the voice-activation plumbing. Primary display only (multi-monitor is a
+future enhancement). `quit()` calls `oled.stop()`.
 
 `AppSettings.from_json()` migrates legacy keys (`stt_task` →
 `stt_opts.task`, `tts_speaker` → `tts_voice`, `tts_length_scale` →

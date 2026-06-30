@@ -80,6 +80,18 @@ class AppSettings:
     # active states (recording / processing / enhancing / typing / error).
     pill_active_only: bool = False
 
+    # ── OLED burn-in guard ───────────────────────────────────────────
+    # Periodically flash a fullscreen black frame to give OLED pixels a
+    # brief rest. Off by default. `oled_flashes_per_sec` is the only knob
+    # the user sets — the per-flash duration is derived from the display
+    # refresh rate (one frame), so higher-Hz panels flash less perceptibly.
+    # See voxtype/oled_guard.py.
+    oled_guard_enabled: bool = False
+    oled_flashes_per_sec: int = 2
+    # How dark the flash is: 1.0 = full black (max pixel rest, most
+    # noticeable), lower = a translucent dim (gentler, less protection).
+    oled_flash_opacity: float = 1.0
+
     # ── Embedded HTTP server ─────────────────────────────────────────
     server_enabled: bool = True
     server_port: int = 6600
