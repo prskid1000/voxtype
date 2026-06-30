@@ -250,7 +250,6 @@ configured `tts_voice` default is used.
 ⬡/⬢ TTS     ▸ status + family + Load / Unload / Reload
 ⬡/⬢ LLM     ▸ proxy model + Test Proxy Connection
 ⬢   Pill    ▸ Hide Pill / Show Pill + Reset Position
-◳   OLED Guard ▸ Enable + 1 / 2 / 4 / 6 flashes per second
 ─
 Open Settings Window   (default left-click)
 ─
@@ -278,17 +277,6 @@ Settings sections:
     Embedding for SpeechT5, Temperature for Bark, …).
 - **LLM** — enhance on/off, screen context, proxy URL + model, Test
   Proxy Connection
-- **Display** — **OLED Burn-In Guard**: flash a fullscreen black frame a
-  few times per second to give OLED pixels a brief rest. Off by default.
-  You set one knob — black flashes per second (1 / 2 / 4 / 6) — and the
-  per-flash duration is derived from the auto-detected refresh rate (one
-  display frame, kept honest with a 1 ms multimedia-timer resolution so
-  the flash isn't stretched by Windows' coarse default tick). A **Flash
-  Darkness** slider trades visibility for protection: 100% = full black
-  (pixels fully off), lower = a gentle translucent dim — try ~40-60% if a
-  full black flash is distracting. The frame is click-through and never
-  steals focus. Primary display only. Mild, panel-dependent flicker — not
-  a guaranteed burn-in cure.
 - **History** — saved transcripts with 📋 Raw / 📋 Final copy icons
 - **Logs** — live-tailing `voxtype.log` / `voxtype.log.prev`
 
@@ -335,11 +323,6 @@ class AppSettings:
     #   {"speaker_embedding": "Matthijs/cmu-arctic-xvectors:7306"}  for SpeechT5
     #   {"temperature": 0.7}                       for Bark
     tts_opts: dict = field(default_factory=dict)
-
-    # ── OLED burn-in guard ─────────────────────────────────────────
-    oled_guard_enabled:   bool = False
-    oled_flashes_per_sec: int = 2            # 1 | 2 | 4 | 6
-    oled_flash_opacity:   float = 1.0        # 1.0 = full black, lower = dim
 ```
 
 Old settings files from before the schema change auto-migrate on

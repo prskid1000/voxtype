@@ -30,7 +30,6 @@ from voxtype.audio import Recorder
 from voxtype.wake_listener import WakeListener, matches_start_word
 from voxtype.hotkey import HotkeyListener
 from voxtype.pill_window import PillWindow
-from voxtype.oled_guard import OledGuard
 from voxtype.settings_window import SettingsWindow
 from voxtype.tray_menu import Tray
 from voxtype.typer import type_text
@@ -112,12 +111,6 @@ class Orchestrator(QObject):
         self.flash_error_req.connect(self._apply_flash_error)
         self.wake_trigger_req.connect(self._begin_voice_dictation)
 
-        # OLED burn-in guard — black-frame flasher. Off unless enabled in
-        # settings; apply() reads the current config and starts/stops the
-        # flash loop. Qt-thread only (created + driven here).
-        self.oled = OledGuard()
-        self._apply_oled()
-
         self.window = SettingsWindow(
             restart_service=self._restart_service,
             start_service=self._start_service,
@@ -128,7 +121,6 @@ class Orchestrator(QObject):
             capture_hotkey=self._capture_hotkey,
             set_hotkey=self._apply_hotkey,
             set_voice_activation=self._set_voice_activation,
-            set_oled_guard=self._apply_oled,
         )
 
         self.tray = Tray(
@@ -142,7 +134,6 @@ class Orchestrator(QObject):
             on_pill_hide=self.pill.hide_for_session,
             on_pill_show=self.pill.show_from_session,
             on_pill_active_only=self.pill.set_active_only,
-            on_oled_changed=self._apply_oled,
         )
 
         # Hotkey
@@ -526,15 +517,6 @@ class Orchestrator(QObject):
     def _set_pill(self, state: str, message: str) -> None:
         self.pill_state_req.emit(state, message)
 
-    def _apply_oled(self) -> None:
-        """(Re)apply the OLED guard from current settings. Called at boot
-        and whenever the tray submenu or Display settings page changes a
-        knob. Qt-thread only — the tray/settings callbacks all fire there."""
-        try:
-            self.oled.apply(config.load())
-        except Exception as exc:
-            log.warning("oled guard apply failed: %s", exc)
-
     def _flash_error(self, message: str, dwell_ms: int = 2000) -> None:
         """Thread-safe: emit a signal that's handled on the Qt thread.
         The previous implementation called QTimer.singleShot directly
@@ -562,10 +544,6 @@ class Orchestrator(QObject):
             pass
         try:
             self.wake.stop()
-        except Exception:
-            pass
-        try:
-            self.oled.stop()
         except Exception:
             pass
         # Kick off async shutdown of sidecars + proxy

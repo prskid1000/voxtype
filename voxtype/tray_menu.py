@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QPixmap
+from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from voxtype import config, process
@@ -45,8 +45,7 @@ class Tray:
                  on_pill_reset: Callable[[], None] | None = None,
                  on_pill_hide:  Callable[[], None] | None = None,
                  on_pill_show:  Callable[[], None] | None = None,
-                 on_pill_active_only: Callable[[bool], None] | None = None,
-                 on_oled_changed: Callable[[], None] | None = None) -> None:
+                 on_pill_active_only: Callable[[bool], None] | None = None) -> None:
         self._on_toggle_window = on_toggle_window
         self._on_quit = on_quit
         self._on_restart_service = on_restart_service
@@ -57,7 +56,6 @@ class Tray:
         self._on_pill_hide  = on_pill_hide
         self._on_pill_show  = on_pill_show
         self._on_pill_active_only = on_pill_active_only
-        self._on_oled_changed = on_oled_changed
 
         self.tray = QSystemTrayIcon(make_icon())
         self.tray.setToolTip("VoxType")
@@ -129,29 +127,6 @@ class Tray:
         if self._pill_is_hidden and self._on_pill_hide:
             self._on_pill_hide()
 
-        # ── OLED guard submenu ──────────────────────────────────────
-        # Black-frame burn-in guard. Enable toggle + exclusive
-        # flashes/sec preset group. Both patch settings then notify the
-        # orchestrator (on_oled_changed) so the live guard re-applies.
-        s0 = config.load()
-        self._oled_menu = self.menu.addMenu("◳ OLED Guard")
-        self._oled_enabled = QAction("Enabled", self._oled_menu)
-        self._oled_enabled.setCheckable(True)
-        self._oled_enabled.setChecked(bool(s0.oled_guard_enabled))
-        self._oled_enabled.toggled.connect(self._on_oled_enabled_toggle)
-        self._oled_menu.addAction(self._oled_enabled)
-        self._oled_menu.addSeparator()
-        self._oled_rate_group = QActionGroup(self._oled_menu)
-        self._oled_rate_group.setExclusive(True)
-        for n in (1, 2, 4, 6):
-            a = QAction(f"{n} flash / sec", self._oled_menu)
-            a.setCheckable(True)
-            a.setChecked(int(s0.oled_flashes_per_sec) == n)
-            a.triggered.connect(lambda _checked=False, val=n: self._on_oled_rate(val))
-            self._oled_rate_group.addAction(a)
-            self._oled_menu.addAction(a)
-        self._refresh_oled_title()
-
         self.menu.addSeparator()
 
         # ── Open settings window ────────────────────────────────────
@@ -210,21 +185,6 @@ class Tray:
         config.patch("pill_active_only", bool(checked))
         if self._on_pill_active_only:
             self._on_pill_active_only(bool(checked))
-
-    def _refresh_oled_title(self) -> None:
-        on = bool(config.load().oled_guard_enabled)
-        self._oled_menu.setTitle("◳ OLED Guard: On" if on else "◳ OLED Guard")
-
-    def _on_oled_enabled_toggle(self, checked: bool) -> None:
-        config.patch("oled_guard_enabled", bool(checked))
-        self._refresh_oled_title()
-        if self._on_oled_changed:
-            self._on_oled_changed()
-
-    def _on_oled_rate(self, value: int) -> None:
-        config.patch("oled_flashes_per_sec", int(value))
-        if self._on_oled_changed:
-            self._on_oled_changed()
 
     def _refresh(self) -> None:
         settings = config.load()
