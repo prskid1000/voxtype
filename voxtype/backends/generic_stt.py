@@ -138,6 +138,14 @@ class _BaseHandler:
 class _WhisperHandler(_BaseHandler):
     family = fd.STT_WHISPER
 
+    # Whisper's encoder is hard-wired to a 30 s receptive field: the
+    # feature extractor pads OR TRUNCATES every input to exactly 3000 mel
+    # frames, so a plain single-shot generate() silently drops everything
+    # past 30 s (a 10-minute dictation comes back as its first half-minute,
+    # cut mid-sentence). Longer audio must go through transformers'
+    # sequential long-form algorithm — see `transcribe` below.
+    _WINDOW_SEC = 30.0
+
     def load(self, cfg: LoadConfig) -> None:
         import torch
         from transformers import WhisperForConditionalGeneration, AutoProcessor
@@ -167,16 +175,43 @@ class _WhisperHandler(_BaseHandler):
 
     def transcribe(self, audio: np.ndarray, opts: dict[str, Any]) -> str:
         import torch
-        inputs = self._processor(audio, sampling_rate=16000, return_tensors="pt")
+        long_form = audio.shape[-1] > int(16000 * self._WINDOW_SEC)
+        if long_form:
+            # Hand transformers the UN-truncated mel so its sequential
+            # long-form decoder can slice the audio into consecutive 30 s
+            # windows itself and stitch the segments back together. All
+            # three kwargs are load-bearing: `truncation=False` keeps the
+            # tail, `padding="longest"` pads to the real length instead of
+            # 3000 frames, and the attention mask tells generate() where
+            # the audio actually ends.
+            inputs = self._processor(
+                audio, sampling_rate=16000, return_tensors="pt",
+                truncation=False, padding="longest",
+                return_attention_mask=True,
+            )
+            log.info("whisper: long-form path (%.1fs audio)",
+                     audio.shape[-1] / 16000.0)
+        else:
+            inputs = self._processor(audio, sampling_rate=16000, return_tensors="pt")
         feats = inputs.input_features.to(self._torch_device, dtype=self._torch_dtype)
         beams = max(1, int(opts.get("num_beams") or 1))
         temp = float(opts.get("temperature") or 0.0)
         rep = float(opts.get("repetition_penalty") or 1.0)
         gen: dict = {
             "task": str(opts.get("task") or "transcribe"),
-            "max_new_tokens": 440,
             "num_beams": beams,
         }
+        if long_form:
+            # Timestamps are what the sequential decoder uses to find each
+            # window's cut point, so they're mandatory here. `max_new_tokens`
+            # must NOT be set: it is a per-window budget and transformers
+            # rejects any value that doesn't fit Whisper's 448-token context.
+            gen["return_timestamps"] = True
+            mask = getattr(inputs, "attention_mask", None)
+            if mask is not None:
+                gen["attention_mask"] = mask.to(self._torch_device)
+        else:
+            gen["max_new_tokens"] = 440
         # Sampling kicks in only when explicitly asked. Whisper's beam
         # search and sampling are mutually exclusive — if both num_beams>1
         # AND temperature>0 are set, prefer beams (the user's intent is
@@ -492,7 +527,15 @@ class _GenericPipelineHandler(_BaseHandler):
 
     def transcribe(self, audio: np.ndarray, opts: dict[str, Any]) -> str:
         # pipeline accepts a numpy float32 array directly.
-        out = self._pipe(audio.astype(np.float32))
+        kw: dict[str, Any] = {}
+        if audio.shape[-1] > 16000 * 30:
+            # Same 30 s trap as the Whisper handler, one layer up: without
+            # `chunk_length_s` the pipeline truncates fixed-window models to
+            # their first window. Chunking is a no-op for models that
+            # already accept arbitrary-length audio.
+            kw["chunk_length_s"] = 30
+            kw["stride_length_s"] = 5
+        out = self._pipe(audio.astype(np.float32), **kw)
         if isinstance(out, dict):
             return str(out.get("text") or "").strip()
         return str(out).strip()

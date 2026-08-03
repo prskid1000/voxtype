@@ -129,6 +129,30 @@ registered backends. Each is a thin dispatcher: `load_sync` calls
 (missing optional dep, exotic arch). Family handlers are inline
 classes inside the same file — no shared state across families.
 
+**The 30-second trap (long dictation).** Whisper's encoder has a fixed
+30 s receptive field: `WhisperFeatureExtractor` pads OR TRUNCATES every
+input to exactly 3000 mel frames, so a plain single-shot
+`model.generate()` silently returns only the first 30 s of a longer
+recording — cut mid-sentence, with no error and nothing in the log. The
+audio is captured and delivered fine; the loss happens at feature
+extraction. `_WhisperHandler.transcribe` therefore gates on
+`_WINDOW_SEC` and routes anything longer through transformers'
+sequential long-form decoder, which needs all of:
+`truncation=False` + `padding="longest"` + `return_attention_mask=True`
+on the processor call, `return_timestamps=True` on generate (the
+decoder uses them to find each window's cut point), the attention mask
+forwarded, and **no `max_new_tokens`** — that value is a per-window
+budget and transformers rejects anything that doesn't fit Whisper's
+448-token context. Verified end-to-end at 150 s / 25 segments: 428
+chars before, 2180 after. `_GenericPipelineHandler` has the same trap
+one layer up and passes `chunk_length_s` for long input.
+
+Whenever a stage of the pipeline has a fixed window or token cap, check
+whether it *errors* or *silently truncates* — this bug class produces a
+plausible-looking short transcript that no test notices.
+`llm.enhance()` had the same shape (fixed `max_tokens=4096`); its
+budget and timeout now scale with the transcript.
+
 ## Family detection (`backends/family_detect.py`)
 
 Three layers, fast → slow:

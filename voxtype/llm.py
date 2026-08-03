@@ -176,7 +176,14 @@ def _extract_output(raw: str) -> str:
         except Exception:
             pass
 
-    # 4. Give up
+    # 4. Give up. If it still looks like a structured reply we failed to
+    # parse (truncated mid-JSON, most likely), returning it raw would
+    # paste `{"screen_context": ...` into the user's document — hand back
+    # empty so _clean_output falls back to the original transcript.
+    if text.lstrip().startswith("{"):
+        log.info("structured LLM output unparseable (truncated?), "
+                 "using original")
+        return ""
     log.info("could not parse structured LLM output, using raw")
     return text
 
@@ -242,12 +249,18 @@ async def enhance(
     model: str,
     screenshot_jpeg_b64: str | None = None,
     max_retries: int = 2,
-    timeout: float = 30.0,
+    timeout: float = 0.0,
 ) -> str:
     """Clean `transcript` via the telecode proxy. Returns the cleaned
-    string, or the original on any failure."""
+    string, or the original on any failure.
+
+    `timeout` defaults to 0 = derive it from the transcript length: a
+    multi-minute dictation is thousands of output tokens and cannot
+    finish inside the 30 s that suits a one-liner."""
     if not transcript.strip():
         return ""
+    if timeout <= 0:
+        timeout = min(300.0, 30.0 + len(transcript) / 40.0)
 
     cache_key = (
         f"{transcript}::{len(screenshot_jpeg_b64)}:{screenshot_jpeg_b64[:32]}"
@@ -284,6 +297,13 @@ async def enhance(
     else:
         user_content = instruction
 
+    # Cleanup is a rewrite, so the reply is roughly as long as the input.
+    # A fixed cap silently truncates long dictation exactly the way
+    # Whisper's 30 s window used to (see generic_stt._WhisperHandler):
+    # scale it with the transcript, ~1 token per 3 chars plus headroom for
+    # the scratch fields.
+    budget = max(4096, int(len(transcript) / 3) * 2 + 1024)
+
     payload = {
         "model": model,
         "messages": [
@@ -291,7 +311,7 @@ async def enhance(
             {"role": "user",   "content": user_content},
         ],
         "temperature": 0,
-        "max_tokens": 4096,
+        "max_tokens": budget,
         "response_format": _SCHEMA,
         # Transcript cleanup is a fixed-format rewrite — there's nothing
         # for reasoning to figure out. The proxy resolves this to whatever
