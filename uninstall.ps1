@@ -5,7 +5,7 @@
     optionally removes the install directory + user data.
 #>
 param(
-    [string]$InstallDir = "$env:USERPROFILE\.voxtype"
+    [string]$InstallDir = $PSScriptRoot
 )
 
 function Ok($msg)   { Write-Host "  [OK] $msg"   -ForegroundColor Green }

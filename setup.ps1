@@ -13,14 +13,14 @@
     embedded OpenAI-compatible HTTP server on port 6600 (configurable).
     LLM transcript cleanup is still routed through telecode's proxy.
 .PARAMETER InstallDir
-    Where everything lives. Defaults to ~/.voxtype.
+    Where everything lives. Defaults to the folder this script is in.
 .PARAMETER GpuSupport
     Install torch with a CUDA wheel so STT + TTS run on GPU when
     device='cuda'. Set to $false for CPU-only.
 .PARAMETER CudaVersion
     Which CUDA wheel index to use when -GpuSupport is on. Accepts
-    "cu130" (CUDA 13, nightly), "cu124" (CUDA 12.4 stable, recommended
-    if you don't have CUDA 13 installed), or "cpu". Default cu130.
+    "cu132" (CUDA 13.2 stable, default), "cu130" (CUDA 13.0 stable),
+    "cu124" (CUDA 12.4 stable, for pre-580 drivers), or "cpu".
 .PARAMETER FlashAttn
     Attempt to install Flash-Attention 2 for ~1.5-2x speedup on
     Whisper / Voxtral / Seamless inference. Requires fp16/bf16 +
@@ -29,19 +29,19 @@
     There are NO official PyPI Windows wheels. We sniff the venv's
     torch+CUDA+python triple and search the community Windows-wheel
     repos (mjun0812 / GarfieldHuang / jono0301) via the GitHub API
-    for a matching prebuilt. Coverage is narrow and lags torch's
-    nightly cu130 path — most users on the default `-CudaVersion cu130`
-    won't find a match and will need to either:
+    for a matching prebuilt, checking ussoewwin's Hugging Face repo
+    first (it has cp314 / cu132 / torch 2.14 builds incl. Blackwell).
+    If nothing matches you can either:
       a) re-run with `-CudaVersion cu124` (much broader wheel coverage)
       b) pin torch to a stable version + build from source
       c) leave Settings -> Attention on 'auto' (sdpa is still fast)
     Default `$false`. Set `-FlashAttn $true` to opt in.
 #>
 param(
-    [string]$InstallDir   = "$env:USERPROFILE\.voxtype",
+    [string]$InstallDir   = $PSScriptRoot,
     [bool]  $GpuSupport   = $true,
-    [ValidateSet("cu130", "cu124", "cpu")]
-    [string]$CudaVersion  = "cu130",
+    [ValidateSet("cu132", "cu130", "cu124", "cpu")]
+    [string]$CudaVersion  = "cu132",
     [bool]  $FlashAttn    = $false
 )
 
@@ -80,6 +80,8 @@ if (Test-Path $pyenvRoot) {
     }
 }
 foreach ($p in @(
+    "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
     "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
     "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
     "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
@@ -139,19 +141,19 @@ if (-not (Test-Path $voxPython)) {
 & $voxPython -m pip install --upgrade pip --no-cache-dir --quiet 2>&1 | Out-Null
 
 # ── torch first, with the right CUDA index ──────────────────────────
-# torch ships its own bundled CUDA runtime, so installing the cu130
+# torch ships its own bundled CUDA runtime, so installing the cu132
 # wheel works on machines with CUDA 13 drivers without a separate
 # toolkit install. CPU is the safe fallback when -GpuSupport is off.
 $torchIndex = $null
 if (-not $GpuSupport) {
     $torchIndex = "https://download.pytorch.org/whl/cpu"
     Write-Host "    pip install torch (CPU build)..." -ForegroundColor DarkGray
+} elseif ($CudaVersion -eq "cu132") {
+    $torchIndex = "https://download.pytorch.org/whl/cu132"
+    Write-Host "    pip install torch (CUDA 13.2 stable)..." -ForegroundColor DarkGray
 } elseif ($CudaVersion -eq "cu130") {
-    # PyTorch nightly is the only channel currently shipping CUDA 13
-    # wheels (as of mid-2026). Once stable wheels land, switch to the
-    # /whl/cu130 URL.
-    $torchIndex = "https://download.pytorch.org/whl/nightly/cu130"
-    Write-Host "    pip install torch (CUDA 13 nightly)..." -ForegroundColor DarkGray
+    $torchIndex = "https://download.pytorch.org/whl/cu130"
+    Write-Host "    pip install torch (CUDA 13.0 stable)..." -ForegroundColor DarkGray
 } elseif ($CudaVersion -eq "cu124") {
     $torchIndex = "https://download.pytorch.org/whl/cu124"
     Write-Host "    pip install torch (CUDA 12.4 stable)..." -ForegroundColor DarkGray
@@ -164,7 +166,6 @@ if (-not $GpuSupport) {
 # the noisy "Failed to initialize NumPy" warning on the sanity check.
 # numpy is in requirements.txt too — pip dedupes the second install.
 $pipExtra = @()
-if ($CudaVersion -eq "cu130" -and $GpuSupport) { $pipExtra += "--pre" }
 & "$voxVenv\Scripts\pip.exe" install @pipExtra torch "numpy>=1.26" --index-url $torchIndex --extra-index-url https://pypi.org/simple --no-cache-dir --quiet 2>&1 | Out-Null
 
 if (-not (Test-Path "$voxVenv\Lib\site-packages\torch")) {
@@ -259,8 +260,25 @@ def search(releases, strict):
             return (n, a.get("browser_download_url"))
     return None
 
-hit = None
-for repo in REPOS:
+def search_hf():
+    # ussoewwin/Flash-Attention-2_for_Windows: flat repo of Windows wheels,
+    # tagged <ver>+<cuda>torch<ver>cxx11abiTRUE[.blackwell|.legacy]-<py>-<py>-win_amd64
+    tree = fetch("https://huggingface.co/api/models/ussoewwin/Flash-Attention-2_for_Windows/tree/main") or []
+    try:
+        import torch
+        blackwell = torch.cuda.get_device_capability()[0] >= 12
+    except Exception:
+        blackwell = False
+    names = [x["path"] for x in tree if x.get("path", "").endswith("-win_amd64.whl")
+             and f"{CUDA}torch{needle_torch}" in x["path"] and f"-{PY}-" in x["path"]]
+    pref = [n for n in names if (".blackwell" in n) == blackwell] or names
+    if not pref: return None
+    n = sorted(pref)[-1]
+    return (n, "https://huggingface.co/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/" + n)
+
+hit = search_hf()
+if hit: print("REPO ussoewwin (huggingface)", file=sys.stderr)
+for repo in ([] if hit else REPOS):
     releases = fetch(f"https://api.github.com/repos/{repo}/releases?per_page=30")
     hit = search(releases, strict=True) or search(releases, strict=False)
     if hit:
@@ -275,7 +293,7 @@ print(hit[1])
         $wheelUrl = & $voxPython -c $resolve 2>&1
         if ($LASTEXITCODE -ne 0 -or $wheelUrl -match "ERROR") {
             Warn "No prebuilt Flash-Attn wheel matched python=$py torch=$tv $cu."
-            Warn "Likely cause: torch nightly + cu130 has narrow wheel coverage on Windows."
+            Warn "Community Windows wheels only cover some python/torch/CUDA combinations."
             Warn "Options:"
             Warn "  1) Re-run setup with -CudaVersion cu124 (much broader Flash-Attn coverage)"
             Warn "  2) Pin torch to a stable version (2.5.1 / 2.6 / 2.7) and re-run -FlashAttn"
