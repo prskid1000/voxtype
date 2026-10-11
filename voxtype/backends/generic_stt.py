@@ -155,23 +155,36 @@ class _WhisperHandler(_BaseHandler):
             WhisperForConditionalGeneration.from_pretrained, cfg.model_id)
         self._model.eval()
         if cfg.torch_compile:
+            # Compile `forward` (what generate() calls every decode step), NOT
+            # the module: torch.compile(model) returns a wrapper whose
+            # `.generate` resolves to the original module's method, which then
+            # calls the original, uncompiled forward — a silent no-op.
+            # Compile errors only surface on the first call, so verify with a
+            # warm-up and fall back to eager if it fails.
+            eager_fwd = self._model.forward
             try:
-                self._model = torch.compile(self._model, mode="reduce-overhead")
+                self._model.forward = torch.compile(
+                    eager_fwd, mode="reduce-overhead"
+                    if self._torch_device == "cuda" else "default")
+                self._warmup()
             except Exception as exc:
-                log.warning("whisper: torch.compile failed (%s)", exc)
+                log.warning("whisper: torch.compile failed (%s); using eager", exc)
+                self._model.forward = eager_fwd
         if cfg.warmup:
-            # Minimal forward pass: triggers lazy CUDA-kernel / cuDNN
-            # autotuning (the real win) without a full 440-token decode.
             try:
-                dummy = np.zeros(16000, dtype=np.float32)
-                inputs = self._processor(
-                    dummy, sampling_rate=16000, return_tensors="pt")
-                feats = inputs.input_features.to(
-                    self._torch_device, dtype=self._torch_dtype)
-                with torch.no_grad():
-                    self._model.generate(feats, max_new_tokens=1)
+                self._warmup()
             except Exception as exc:
                 log.warning("whisper warmup failed: %s", exc)
+
+    def _warmup(self) -> None:
+        # Minimal forward pass: triggers lazy CUDA-kernel / cuDNN
+        # autotuning (the real win) without a full 440-token decode.
+        import torch
+        dummy = np.zeros(16000, dtype=np.float32)
+        inputs = self._processor(dummy, sampling_rate=16000, return_tensors="pt")
+        feats = inputs.input_features.to(self._torch_device, dtype=self._torch_dtype)
+        with torch.no_grad():
+            self._model.generate(feats, max_new_tokens=1)
 
     def transcribe(self, audio: np.ndarray, opts: dict[str, Any]) -> str:
         import torch
