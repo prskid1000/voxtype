@@ -47,7 +47,8 @@ class SettingsDefaults(unittest.TestCase):
         s = AppSettings()
         for legacy in ("stt_backend", "tts_backend", "stt_task",
                         "stt_num_beams", "stt_initial_prompt",
-                        "tts_speaker", "tts_length_scale"):
+                        "tts_speaker", "tts_length_scale",
+                        "stt_chunk_length_s", "stt_stride_length_s"):
             self.assertFalse(hasattr(s, legacy),
                               f"legacy field {legacy!r} should be gone")
 
@@ -56,7 +57,6 @@ class SettingsDefaults(unittest.TestCase):
         s = AppSettings()
         for needed in ("stt_model_path", "stt_device", "stt_language",
                         "stt_dtype", "stt_attn_impl",
-                        "stt_chunk_length_s", "stt_stride_length_s",
                         "stt_opts",
                         "tts_model_path", "tts_device", "tts_voice",
                         "tts_speed", "tts_attn_impl", "tts_seed",
@@ -70,7 +70,6 @@ class SettingsDefaults(unittest.TestCase):
         self.assertEqual(s.stt_attn_impl, "auto")
         self.assertEqual(s.tts_attn_impl, "auto")
         self.assertEqual(s.tts_seed, -1)
-        self.assertEqual(s.stt_chunk_length_s, 0)
 
     def test_load_config_carries_attn_impl(self):
         from voxtype.backends.stt_base import LoadConfig

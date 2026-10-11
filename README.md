@@ -325,9 +325,8 @@ class AppSettings:
     tts_opts: dict = field(default_factory=dict)
 ```
 
-Old settings files from before the schema change auto-migrate on
-load (`stt_task` → `stt_opts.task`, `tts_speaker` → `tts_voice`,
-etc.). No manual editing required.
+Unknown keys in `settings.json` are ignored on load and dropped on
+the next save.
 
 ---
 

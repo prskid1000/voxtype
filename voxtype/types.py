@@ -110,10 +110,6 @@ class AppSettings:
     # versions); `flash_attention_2` requires fp16/bf16 + Ampere+; `eager`
     # is the safe fallback for exotic models.
     stt_attn_impl: str = "auto"
-    # Long-form chunking for the embedded HTTP server. 0 = off (single-
-    # utterance dictation never needs this).
-    stt_chunk_length_s: int = 0
-    stt_stride_length_s: int = 0
     # Family-specific per-call options. Populated by the UI from the
     # backend's runtime_options() spec list. Whisper writes `task`,
     # `num_beams`, `temperature`, `repetition_penalty`, `initial_prompt`;

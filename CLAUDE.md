@@ -208,7 +208,6 @@ class AppSettings:
     stt_enabled / stt_auto_start / stt_idle_unload_sec
     stt_model_path / stt_device / stt_language / stt_dtype
     stt_warmup / stt_torch_compile / stt_attn_impl
-    stt_chunk_length_s / stt_stride_length_s
     stt_opts: dict   # family-specific (e.g. {"task": "translate", "num_beams": 5})
 
     # Universal TTS
@@ -241,9 +240,8 @@ listener stream) and the pipeline `finally` / hotkey-up early-returns call
 (the `voice_activation_enabled` checkbox), which calls
 `_set_voice_activation` to start/stop the listener.
 
-`AppSettings.from_json()` migrates legacy keys (`stt_task` →
-`stt_opts.task`, `tts_speaker` → `tts_voice`, `tts_length_scale` →
-`tts_speed`, legacy `stt_backend`/`tts_backend` → `"generic"`).
+`AppSettings.from_json()` does no key migration: unknown keys in
+settings.json are ignored on load and dropped on the next save.
 
 `config.patch("stt_opts.task", "translate")` dotted writes land in
 the opts dict; flat keys still work for top-level fields.
