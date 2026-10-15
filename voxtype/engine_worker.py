@@ -84,6 +84,10 @@ class _Model:
     def _load(self) -> None:
         c = self.cfg
         model_id = c.get("model_id") or _default_model(self.modality)
+        # torch.compile on CPU initialises CUDA (dynamo/inductor probe it), pinning a
+        # context in the worker even though no weights are on the GPU. CPU compile
+        # is also near-useless here, so only honour the flag for cuda.
+        compile_ok = bool(c.get("torch_compile", False)) and c.get("device") == "cuda"
         self.last_error = ""
         if self.modality == "stt":
             from voxtype.backends import get_stt_backend
@@ -92,7 +96,7 @@ class _Model:
             cfg = LoadConfig(
                 model_id=model_id, device=c.get("device", "cpu"),
                 dtype=c.get("dtype", "auto"), warmup=bool(c.get("warmup", True)),
-                torch_compile=bool(c.get("torch_compile", False)),
+                torch_compile=compile_ok,
                 attn_impl=c.get("attn_impl", "auto"),
             )
         else:
@@ -102,7 +106,7 @@ class _Model:
             cfg = TTSLoadConfig(
                 model_id=model_id, device=c.get("device", "cpu"),
                 warmup=bool(c.get("warmup", True)),
-                torch_compile=bool(c.get("torch_compile", False)),
+                torch_compile=compile_ok,
                 attn_impl=c.get("attn_impl", "auto"),
             )
         log.info("%s loading model=%s device=%s", self.modality, model_id,
