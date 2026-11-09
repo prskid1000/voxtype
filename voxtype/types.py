@@ -91,6 +91,15 @@ class AppSettings:
     # stt/tts_idle_unload_sec, but the context lingers).
     engine_idle_exit_sec: int = 60
 
+    # ── Model loading (voxtype/fast_load.py) ─────────────────────────
+    # Read .safetensors weights with parallel unbuffered workers: the
+    # drive's full speed, and nothing left in Windows' file cache, so
+    # unloading a model frees all of its RAM. Off = transformers' own
+    # memory-mapped load. Applied when the worker (re)starts.
+    fast_load: bool = True
+    fast_load_readers: int = 4
+    fast_load_chunk_mb: int = 32
+
     # ── STT (one generic backend, family auto-detected) ─────────────
     # `stt_model_path` accepts any HF repo ID (auto-downloaded) or a
     # local path — Whisper, Wav2Vec2, HuBERT, MMS, Seamless,

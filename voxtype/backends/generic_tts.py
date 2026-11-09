@@ -78,6 +78,10 @@ class _BaseTTSHandler:
         kw = dict(self._attn_kwargs())
         kw.update(extra)
         kw["low_cpu_mem_usage"] = True
+        from voxtype import fast_load
+        model = fast_load.load_hf_model(loader, model_id, kw, self._torch_device, extra)
+        if model is not None:
+            return model
         if self._torch_device == "cuda":
             try:
                 return self._local_first(

@@ -108,6 +108,10 @@ class _BaseHandler:
         kw = self._from_pretrained_kwargs()
         kw.update(extra)
         kw["low_cpu_mem_usage"] = True
+        from voxtype import fast_load
+        model = fast_load.load_hf_model(loader, model_id, kw, self._torch_device, extra)
+        if model is not None:
+            return model
         if self._torch_device == "cuda":
             try:
                 return self._local_first(
@@ -183,8 +187,14 @@ class _WhisperHandler(_BaseHandler):
         dummy = np.zeros(16000, dtype=np.float32)
         inputs = self._processor(dummy, sampling_rate=16000, return_tensors="pt")
         feats = inputs.input_features.to(self._torch_device, dtype=self._torch_dtype)
+        gen: dict = {"max_new_tokens": 1}
+        # A multilingual model given no language first runs a whole extra
+        # encoder + decoder pass to DETECT the language of the silent dummy
+        # clip (8.5 s of a 13.7 s CPU warm-up, measured on large-v3): name one.
+        if getattr(getattr(self._model, "generation_config", None), "lang_to_id", None):
+            gen.update(language="en", task="transcribe")
         with torch.no_grad():
-            self._model.generate(feats, max_new_tokens=1)
+            self._model.generate(feats, **gen)
 
     def transcribe(self, audio: np.ndarray, opts: dict[str, Any]) -> str:
         import torch

@@ -1169,11 +1169,62 @@ def _build_services(window) -> QWidget:
         status_getter=_server_status,
     ))
     layout.addWidget(srv_card)
+    layout.addWidget(_build_loading_card(window))
 
     layout.addWidget(_build_stt_card(window))
     layout.addWidget(_build_tts_card(window))
     layout.addStretch(1)
     return scroll
+
+
+def _load_stats_text() -> str:
+    """What the last STT / TTS load took (written by the engine worker)."""
+    import json
+    try:
+        d = json.loads((config.data_dir() / "load-stats.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "No load recorded yet."
+    lines = []
+    for m in ("stt", "tts"):
+        r = d.get(m)
+        if not r:
+            continue
+        rd = r.get("read") or {}
+        read = (f" - weights {rd['gib']} GiB read in {rd['seconds']} s ({rd['mib_s']} MiB/s, "
+                f"{rd['readers']} readers x {rd['chunk_mb']} MiB)") if rd else " - ordinary load"
+        lines.append(f"{m.upper()} {r['at']}: {r['model']} on {r['device']} ready in {r['seconds']} s{read}")
+    return "\n".join(lines) or "No load recorded yet."
+
+
+def _build_loading_card(window) -> QWidget:
+    card, body = _card("Model Loading",
+                       "How the worker reads model weights. Changes apply when the worker restarts "
+                       "(Reload a service, or after the idle exit).")
+    body.addWidget(_row(_label("Fast Loader",
+        "Read .safetensors weights with parallel unbuffered workers: the drive's full speed, and "
+        "nothing left in Windows' file cache, so unloading a model frees all of its RAM. Off = "
+        "transformers' own memory-mapped load (its pages stay cached after unload)."),
+        _checkbox("fast_load", "Enabled")))
+    body.addWidget(_row(_label("Readers", "Parallel read workers (4 reaches an NVMe drive's speed)."),
+                        _spin("fast_load_readers", 1, 16)))
+    body.addWidget(_row(_label("Read Size (MiB)", "Size of one read."),
+                        _spin("fast_load_chunk_mb", 8, 256, 8)))
+    body.addWidget(_row(_label("Worker Idle Exit (s)",
+        "Seconds the worker stays alive with both models unloaded before it exits to free the CUDA "
+        "context. 0 = never exit."),
+        _spin("engine_idle_exit_sec", 0, 86400, 30)))
+    stats = QLabel(_load_stats_text())
+    stats.setWordWrap(True)
+    stats.setProperty("class", "row_help")
+    refresh = QPushButton("Refresh")
+    refresh.clicked.connect(lambda: stats.setText(_load_stats_text()))
+    box = QWidget()
+    bl = QVBoxLayout(box)
+    bl.setContentsMargins(0, 0, 0, 0)
+    bl.addWidget(stats)
+    bl.addWidget(refresh, 0, Qt.AlignmentFlag.AlignLeft)
+    body.addWidget(_row(_label("Last Loads"), box))
+    return card
 
 
 def _build_stt_card(window) -> QWidget:
@@ -1304,8 +1355,9 @@ def _build_stt_card(window) -> QWidget:
 
     compile_row = _row(_label("torch.compile",
         "JIT-compile the model for ~20-40% steady-state speedup. Adds "
-        "~30 s to the FIRST inference (one-time compile). Leave off "
-        "unless you transcribe constantly."),
+        "~30 s to the FIRST inference (one-time compile). GPU only, and "
+        "needs Triton: without it (no official Windows build) the worker "
+        "skips the compile instead of failing after ~20 s."),
         _checkbox("stt_torch_compile", "Enabled"))
     body.addWidget(compile_row); state["compile_row"] = compile_row
 
@@ -1513,7 +1565,8 @@ def _build_tts_card(window) -> QWidget:
         _checkbox("tts_warmup", "Enabled")))
 
     compile_row = _row(_label("torch.compile",
-        "JIT-compile the model for steady-state speedup."),
+        "JIT-compile the model for steady-state speedup. GPU only, and needs "
+        "Triton: without it (no official Windows build) the worker skips it."),
         _checkbox("tts_torch_compile", "Enabled"))
     body.addWidget(compile_row); state["compile_row"] = compile_row
 

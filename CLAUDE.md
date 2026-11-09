@@ -120,6 +120,29 @@ fired. Keep new log strings ASCII regardless. The worker logs to its
 own `data/voxtype-worker.log` (separate file so the two processes don't
 fight over `voxtype.log`).
 
+## Loading and unloading (measured 2026-11-09)
+
+- **All torch work runs on one thread** (`_Host.run`, a single-worker executor in `engine_worker.py`): load, unload
+  (request or idle monitor), transcribe, and every TTS chunk. PyTorch's CPU allocator on Windows is mimalloc, which
+  hands a block freed on another thread back to its owner only when the owner allocates again; with requests on
+  short-lived connection threads and the idle monitor on its own, an unloaded Whisper large-v3 kept 6.7 GB. Now
+  unload leaves ~0.8 GB (the Python + torch runtime). Do not call `ensure_loaded` / backend methods outside
+  `host.run`.
+- `engine_host` starts the worker with `MIMALLOC_PURGE_DELAY=0` (freed memory goes back at once; transcription
+  speed unchanged) and the `fast_load*` settings as `VOXTYPE_FAST_LOAD*`.
+- **`fast_load.py`** reads `.safetensors` with parallel FILE_FLAG_NO_BUFFERING workers into one aligned buffer
+  (tensors are views), and `_load_model` (STT and TTS) builds the model with `from_pretrained(None, config=...,
+  state_dict=...)` + the snapshot's generation config. Nothing enters Windows' file cache, so unload frees all of
+  it; weights are bit-identical to the ordinary load (checked on CPU fp32 and CUDA fp16). Falls back to the ordinary
+  load for extra loader arguments, uncached models or any error. Settings card: Services -> Model Loading (also
+  shows `data/load-stats.json`, the worker's record of each load).
+- `torch_compile` is skipped when Triton is missing (no official Windows build): the attempt cost ~20 s per GPU
+  load and then ran eager anyway.
+- Whisper warm-up names a language and task: otherwise generate() first runs language detection on the silent clip
+  (8.5 s of a 13.7 s CPU warm-up).
+- Whisper large-v3, process start to ready: CPU 26-67 s -> ~11 s (7 s of it the warm-up's 30 s encoder window), GPU
+  ~48 s with compile on -> ~9 s. Kokoro: ~17 s, nearly all inside the kokoro package (8 s import, 3.4 s pipeline).
+
 ## Generic backend dispatcher
 
 `backends/generic_stt.py` and `backends/generic_tts.py` are the only
