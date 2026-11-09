@@ -268,11 +268,44 @@ class EngineHost:
         self._port = 0
 
 
-_HOST: EngineHost | None = None
+# One worker per modality. CUDA's libraries and context (~2-4 GB of private RAM + ~300 MiB VRAM) can only be
+# released by the process exiting, and a worker exits only once everything in it is unloaded: with STT and TTS
+# in one worker, a CPU STT that stays loaded kept a GPU TTS's CUDA memory alive forever after the TTS unloaded.
+# Separate workers: each exits on its own idle timer, and a CPU-only worker never touches CUDA (see _host_key
+# for when the two share one).
+_HOSTS: dict[str, EngineHost] = {}
+_HOSTS_LOCK = threading.Lock()
 
 
-def get_host() -> EngineHost:
-    global _HOST
-    if _HOST is None:
-        _HOST = EngineHost()
-    return _HOST
+def _host_key(modality: str) -> str:
+    """Both models on CUDA share one worker: a second worker would hold a second CUDA context (~300 MiB VRAM)
+    for nothing, since either model keeps CUDA in use anyway. Otherwise each modality has its own worker, so
+    a CPU model never keeps a GPU model's CUDA memory alive."""
+    try:
+        s = config.load()
+        if getattr(s, "stt_device", "cpu") == "cuda" and getattr(s, "tts_device", "cpu") == "cuda":
+            return "gpu"
+    except Exception:  # noqa: BLE001
+        pass
+    return modality
+
+
+def get_host(modality: str) -> EngineHost:
+    """The worker host serving "stt" or "tts" (looked up per call: a device change re-routes it; a worker
+    no longer used exits on its own idle timer)."""
+    key = _host_key(modality)
+    with _HOSTS_LOCK:
+        h = _HOSTS.get(key)
+        if h is None:
+            h = _HOSTS[key] = EngineHost()
+        return h
+
+
+def all_hosts() -> list[EngineHost]:
+    with _HOSTS_LOCK:
+        return list(_HOSTS.values())
+
+
+def stop_all() -> None:
+    for h in all_hosts():
+        h.stop()

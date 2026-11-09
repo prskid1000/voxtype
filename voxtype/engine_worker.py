@@ -420,7 +420,8 @@ def _install_log() -> None:
     for h in list(root.handlers):
         root.removeHandler(h)
     root.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    # one worker per modality appends here: the pid tells their lines apart
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] [pid %(process)d] %(name)s: %(message)s")
     fh = logging.FileHandler(str(path), encoding="utf-8")
     fh.setFormatter(fmt)
     root.addHandler(fh)

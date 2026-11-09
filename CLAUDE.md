@@ -128,6 +128,11 @@ fight over `voxtype.log`).
   short-lived connection threads and the idle monitor on its own, an unloaded Whisper large-v3 kept 6.7 GB. Now
   unload leaves ~0.8 GB (the Python + torch runtime). Do not call `ensure_loaded` / backend methods outside
   `host.run`.
+- **One worker per modality** (`engine_host.get_host(modality)`), except when STT and TTS are both on CUDA (then
+  one shared worker = one CUDA context). CUDA's libraries (~2-4 GB private RAM) and context (~300 MiB VRAM) are
+  freed only by the worker exiting, and a worker exits only with everything in it unloaded: in one shared worker a
+  CPU STT that never unloads kept a GPU TTS's CUDA memory forever. Measured: TTS worker exits 12 s after its unload
+  (idle exit 10 s), VRAM 0, STT keeps working. A CPU-only worker never creates a CUDA context.
 - `engine_host` starts the worker with `MIMALLOC_PURGE_DELAY=0` (freed memory goes back at once; transcription
   speed unchanged) and the `fast_load*` settings as `VOXTYPE_FAST_LOAD*`.
 - **`fast_load.py`** reads `.safetensors` with parallel FILE_FLAG_NO_BUFFERING workers into one aligned buffer

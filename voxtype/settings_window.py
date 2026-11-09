@@ -1049,7 +1049,7 @@ def _live_state_tile(name: str) -> QWidget:
         # with weights freed (context cached, fast reload); "Idle" = worker
         # exited, context fully released.
         from voxtype.engine_host import get_host
-        snap = get_host().cached_status()
+        snap = get_host(name).cached_status()
         if snap.get("alive") and not snap.get("down"):
             _set_state("idle"); value.setText("Warm")
             sub.setText("Weights freed · GPU context cached")

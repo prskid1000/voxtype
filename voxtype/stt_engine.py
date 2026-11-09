@@ -54,10 +54,10 @@ class _BackendView:
     Reads the family the worker reported via the host status cache."""
 
     def detected_family(self) -> str:
-        return (get_host().cached_status().get("stt") or {}).get("family", "")
+        return (get_host("stt").cached_status().get("stt") or {}).get("family", "")
 
     def runtime_info(self) -> dict:
-        return get_host().cached_status().get("stt") or {}
+        return get_host("stt").cached_status().get("stt") or {}
 
 
 class STTEngine:
@@ -80,7 +80,7 @@ class STTEngine:
         self._idle_exit_sec = 60
         self._opts: dict[str, Any] = {}
 
-        get_host().on_status(self._on_host_status)
+        get_host("stt").on_status(self._on_host_status)
 
     # ── Listener wiring ──────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ class STTEngine:
                 pass
 
     def get_status(self) -> EngineStatus:
-        snap = get_host().cached_status().get("stt") or {}
+        snap = get_host("stt").cached_status().get("stt") or {}
         ready = bool(snap.get("loaded"))
         err = "" if ready else (snap.get("error") or self._last_error)
         return EngineStatus(
@@ -108,7 +108,7 @@ class STTEngine:
         return self._backend_view
 
     def idle_info(self) -> tuple[int, float]:
-        snap = get_host().cached_status().get("stt") or {}
+        snap = get_host("stt").cached_status().get("stt") or {}
         limit = int(snap.get("idle_unload_sec", self._idle_unload_sec) or 0)
         if not snap.get("loaded"):
             return (limit, -1.0)
@@ -151,7 +151,7 @@ class STTEngine:
         loop = asyncio.get_event_loop()
         try:
             return await loop.run_in_executor(
-                None, lambda: get_host().request(op, header, payload, spawn=spawn))
+                None, lambda: get_host("stt").request(op, header, payload, spawn=spawn))
         except Exception as exc:  # noqa: BLE001
             if swallow:
                 return ({"ok": False, "error": str(exc)}, b"")

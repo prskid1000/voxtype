@@ -39,7 +39,7 @@ class TTSStatus:
 
 class _BackendView:
     def detected_family(self) -> str:
-        return (get_host().cached_status().get("tts") or {}).get("family", "")
+        return (get_host("tts").cached_status().get("tts") or {}).get("family", "")
 
     def voices(self) -> list:
         # Dynamic (non-catalog) voices live in the worker; the static
@@ -71,7 +71,7 @@ class TTSEngine:
         self._idle_exit_sec = 60
         self._opts: dict[str, Any] = {}
 
-        get_host().on_status(self._on_host_status)
+        get_host("tts").on_status(self._on_host_status)
 
     # ── Listener wiring ──────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ class TTSEngine:
         self._listeners.append(fn)
 
     def _on_host_status(self, _snap: dict) -> None:
-        snap = get_host().cached_status().get("tts") or {}
+        snap = get_host("tts").cached_status().get("tts") or {}
         if snap.get("loaded") and snap.get("sample_rate"):
             self._sample_rate = int(snap["sample_rate"])
         st = self.get_status()
@@ -90,7 +90,7 @@ class TTSEngine:
                 pass
 
     def get_status(self) -> TTSStatus:
-        snap = get_host().cached_status().get("tts") or {}
+        snap = get_host("tts").cached_status().get("tts") or {}
         ready = bool(snap.get("loaded"))
         err = "" if ready else (snap.get("error") or self._last_error)
         return TTSStatus(
@@ -102,7 +102,7 @@ class TTSEngine:
         return self._backend_view
 
     def idle_info(self) -> tuple[int, float]:
-        snap = get_host().cached_status().get("tts") or {}
+        snap = get_host("tts").cached_status().get("tts") or {}
         limit = int(snap.get("idle_unload_sec", self._idle_unload_sec) or 0)
         if not snap.get("loaded"):
             return (limit, -1.0)
@@ -153,7 +153,7 @@ class TTSEngine:
         loop = asyncio.get_event_loop()
         try:
             return await loop.run_in_executor(
-                None, lambda: get_host().request(op, header, payload, spawn=spawn))
+                None, lambda: get_host("tts").request(op, header, payload, spawn=spawn))
         except Exception as exc:  # noqa: BLE001
             if swallow:
                 return ({"ok": False, "error": str(exc)}, b"")
@@ -209,7 +209,7 @@ class TTSEngine:
 
         def _producer() -> None:
             try:
-                for fhdr, payload in get_host().stream("synth_stream", header):
+                for fhdr, payload in get_host("tts").stream("synth_stream", header):
                     if fhdr.get("sample_rate"):
                         self._sample_rate = int(fhdr["sample_rate"])
                     if payload:
