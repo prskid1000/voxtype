@@ -34,6 +34,30 @@ log = logging.getLogger("voxtype.engine_worker")
 
 # ── Per-modality model holder ────────────────────────────────────────
 
+def _record_load(modality: str, model_id: str, device: str, seconds: float, read: dict) -> None:
+    """data/load-stats.json: what the last load of each modality took (the settings window shows it)."""
+    import json
+    from pathlib import Path
+    try:
+        p = Path(config.data_dir()) / "load-stats.json"
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            d = {}
+        d[modality] = {"at": time.strftime("%Y-%m-%d %H:%M"), "model": model_id, "device": device,
+                       "seconds": round(seconds, 1), "read": read}
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+        tmp.replace(p)
+    except Exception as exc:  # noqa: BLE001 — a statistic, never a reason to fail a load
+        log.debug("load stats not written: %s", exc)
+
+
+def _triton_available() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("triton") is not None
+
+
 class _Model:
     """Owns one lazily-loaded backend (stt or tts) plus its config + idle
     bookkeeping. All torch work runs under the shared host lock."""
@@ -88,6 +112,12 @@ class _Model:
         # context in the worker even though no weights are on the GPU. CPU compile
         # is also near-useless here, so only honour the flag for cuda.
         compile_ok = bool(c.get("torch_compile", False)) and c.get("device") == "cuda"
+        if compile_ok and not _triton_available():
+            # torch.compile's default backend (inductor) generates Triton kernels; without Triton (no
+            # official Windows build) it fails on the first call - after ~20 s - and the model runs
+            # eager anyway. Skip the attempt instead of paying for it on every load.
+            log.info("%s: torch_compile skipped (Triton is not installed)", self.modality)
+            compile_ok = False
         self.last_error = ""
         if self.modality == "stt":
             from voxtype.backends import get_stt_backend
@@ -111,11 +141,16 @@ class _Model:
             )
         log.info("%s loading model=%s device=%s", self.modality, model_id,
                  c.get("device", "cpu"))
+        from voxtype import fast_load
+        fast_load.LAST_READ.clear()
+        t0 = time.monotonic()
         be.load_sync(cfg)
         self.backend = be
         self.loaded_key = self._key()
         self.last_used = time.monotonic()
-        log.info("%s ready (%s)", self.modality, be.runtime_info())
+        took = self.last_used - t0
+        log.info("%s ready in %.1f s (%s)", self.modality, took, be.runtime_info())
+        _record_load(self.modality, model_id, c.get("device", "cpu"), took, dict(fast_load.LAST_READ))
 
     def unload(self) -> bool:
         if self.backend is None:
@@ -193,6 +228,16 @@ class _Host:
         self.lock = threading.Lock()        # serializes all torch work
         self.shutdown = threading.Event()
         self.last_activity = time.monotonic()
+        # Every load and unload runs on this one long-lived thread. PyTorch's CPU allocator (mimalloc) keeps a
+        # block that is freed on another thread on its owner's list until the owner allocates again; requests
+        # arrive on short-lived connection threads and the idle monitor unloads from its own, so an unloaded
+        # model's RAM used to stay held. Same owner + MIMALLOC_PURGE_DELAY=0 (engine_host) = it goes back.
+        from concurrent.futures import ThreadPoolExecutor
+        self._torch = ThreadPoolExecutor(max_workers=1, thread_name_prefix="voxtype-torch")
+
+    def run(self, fn, *args):
+        """Run `fn(*args)` on the torch thread and return its result (exceptions propagate)."""
+        return self._torch.submit(fn, *args).result()
 
     def model(self, modality: str) -> _Model:
         return self.stt if modality == "stt" else self.tts
@@ -231,7 +276,7 @@ class _Host:
                             log.info("%s idle for %.0fs >= %ds - unloading",
                                      m.modality, now - m.last_used,
                                      m.idle_unload_sec)
-                            m.unload()
+                            self.run(m.unload)
                     if (self.idle_exit_sec > 0 and not self.stt.is_loaded()
                             and not self.tts.is_loaded()):
                         idle_for = now - self.last_activity
@@ -280,9 +325,9 @@ def _handle(host: _Host, header: dict, payload: bytes,
         try:
             with host.lock:
                 if op == "load":
-                    m.ensure_loaded()
+                    host.run(m.ensure_loaded)
                 else:
-                    m.unload()
+                    host.run(m.unload)
             engine_ipc.send_frame(conn, {
                 "ok": True, "family": m.family(),
                 "sample_rate": m.sample_rate()})
@@ -300,10 +345,10 @@ def _handle(host: _Host, header: dict, payload: bytes,
             host.idle_exit_sec = float(header["idle_exit_sec"])
         try:
             with host.lock:
-                m.ensure_loaded()
+                host.run(m.ensure_loaded)
                 m.last_used = time.monotonic()
                 opts = _stt_opts(m, header.get("language"))
-                text = m.backend.transcribe_sync(payload, opts)
+                text = host.run(m.backend.transcribe_sync, payload, opts)
             engine_ipc.send_frame(conn, {"ok": True, "text": text})
         except Exception as exc:  # noqa: BLE001
             m.last_error = str(exc)
@@ -319,7 +364,7 @@ def _handle(host: _Host, header: dict, payload: bytes,
             host.idle_exit_sec = float(header["idle_exit_sec"])
         try:
             with host.lock:
-                m.ensure_loaded()
+                host.run(m.ensure_loaded)
                 m.last_used = time.monotonic()
                 voice, opts = _tts_opts(m, header.get("voice"),
                                         header.get("speed"))
@@ -327,14 +372,15 @@ def _handle(host: _Host, header: dict, payload: bytes,
                 if op == "synth_stream":
                     engine_ipc.send_frame(conn, {"ok": True, "sample_rate": sr,
                                                  "stream": True})
-                    for chunk in m.backend.synth_chunks_sync(
-                            header.get("text", ""), voice, opts):
+                    # each chunk is computed on the torch thread (see _Host.run); sending stays here
+                    it = m.backend.synth_chunks_sync(header.get("text", ""), voice, opts)
+                    while (chunk := host.run(next, it, None)) is not None:
                         if chunk:
                             engine_ipc.send_frame(conn, {"chunk": True}, chunk)
                     engine_ipc.send_frame(conn, {"end": True})
                 else:
-                    parts = [c for c in m.backend.synth_chunks_sync(
-                        header.get("text", ""), voice, opts) if c]
+                    parts = [c for c in host.run(lambda: list(m.backend.synth_chunks_sync(
+                        header.get("text", ""), voice, opts))) if c]
                     engine_ipc.send_frame(
                         conn, {"ok": True, "sample_rate": sr},
                         b"".join(parts))

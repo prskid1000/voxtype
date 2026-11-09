@@ -66,6 +66,15 @@ class EngineHost:
                "--idle-exit-sec", str(idle_exit)]
         env = dict(os.environ)
         env["VOXTYPE_DATA_DIR"] = str(config.data_dir())
+        st = config.load()
+        env["VOXTYPE_FAST_LOAD"] = "1" if getattr(st, "fast_load", True) else "0"
+        env["VOXTYPE_FAST_LOAD_READERS"] = str(int(getattr(st, "fast_load_readers", 4) or 4))
+        env["VOXTYPE_FAST_LOAD_CHUNK_MB"] = str(int(getattr(st, "fast_load_chunk_mb", 32) or 32))
+        # PyTorch's CPU allocator on Windows is mimalloc, which returns freed memory to the OS only when
+        # the same thread allocates again - an idle worker never does, so an unloaded model's RAM stayed
+        # held (measured: 6.3 GB of 7.1 GB). 0 = give it back on free: unload now leaves ~0.8 GB, and
+        # transcription speed did not change measurably.
+        env.setdefault("MIMALLOC_PURGE_DELAY", "0")
         creationflags = 0
         if os.name == "nt":
             creationflags = 0x08000000  # CREATE_NO_WINDOW
