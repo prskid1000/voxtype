@@ -565,13 +565,29 @@ class Orchestrator(QObject):
 # Entry point
 # ══════════════════════════════════════════════════════════════════════
 
+def _set_app_user_model_id(app_id: str) -> None:
+    """Give this process its own taskbar identity. Without it Windows groups
+    the window under pythonw.exe and shows that exe's generic icon."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        pass
+
+
 def main() -> int:
     debug_log.install()
     log.info("VoxType %s starting", __version__)
 
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
+    _set_app_user_model_id("VoxType.App")
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("VoxType")
+    # Taskbar / Alt+Tab icon for every window (the tray icon alone doesn't do it).
+    from voxtype.tray_menu import make_icon
+    app.setWindowIcon(make_icon())
     app.setQuitOnLastWindowClosed(False)
 
     # Single-instance guard: if another VoxType is already running, ask
