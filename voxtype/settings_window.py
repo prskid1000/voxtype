@@ -355,7 +355,7 @@ def _build_dictation(window) -> QWidget:
     hk_row = QWidget()
     hk_l = QHBoxLayout(hk_row); hk_l.setContentsMargins(0, 0, 0, 0); hk_l.setSpacing(8)
     hk_label = QLabel(config.load().hotkey.label)
-    hk_label.setStyleSheet("padding: 4px 8px; border: 1px solid #1e2636; border-radius: 4px; background: #0d1118;")
+    hk_label.setStyleSheet("padding: 4px 8px; border: 1px solid #252b25; border-radius: 4px; background: #0f110f;")
     hk_label.setMinimumWidth(160)
     rebind_btn = QPushButton("Rebind")
     rebind_btn.setProperty("class", "ghost")
@@ -992,9 +992,9 @@ def _live_state_tile(name: str) -> QWidget:
                           f"border-bottom-left-radius: 8px;")
         dot.setStyleSheet(f"color: {c}; font-size: 9px;")
         border = {
-            "ok":   "rgba(86, 224, 194, 0.55)",
-            "busy": "rgba(245, 165, 36, 0.50)",
-            "err":  "rgba(255, 110, 110, 0.50)",
+            "ok":   "rgba(159, 212, 140, 0.55)",
+            "busy": "rgba(224, 206, 138, 0.50)",
+            "err":  "rgba(220, 144, 137, 0.50)",
         }.get(kind, BORDER)
         tile.setStyleSheet(
             f"#liveTile {{ background: {BG_ELEV}; border: 1px solid {border}; "
@@ -1659,7 +1659,7 @@ def _build_history(window) -> QWidget:
     # ── Top row: status + refresh + clear ───────────────────────────
     top = QHBoxLayout(); top.setSpacing(8)
     count_lbl = QLabel("")
-    count_lbl.setStyleSheet("color: #8a96aa; font-size: 11px;")
+    count_lbl.setStyleSheet("color: #8a968a; font-size: 11px;")
     refresh_btn = QPushButton("Refresh"); refresh_btn.setProperty("class", "ghost")
     clear_btn = QPushButton("Clear All"); clear_btn.setProperty("class", "danger")
     top.addWidget(count_lbl); top.addStretch(1)
@@ -1681,7 +1681,7 @@ def _build_history(window) -> QWidget:
     rl.setContentsMargins(10, 0, 0, 0)
     rl.setSpacing(8)
     meta = QLabel("—")
-    meta.setStyleSheet("color: #8a96aa; font-size: 11px;")
+    meta.setStyleSheet("color: #8a968a; font-size: 11px;")
     rl.addWidget(meta)
     raw_label = QLabel("Raw (STT)")
     raw_label.setProperty("class", "section_header")
@@ -1822,17 +1822,17 @@ def _build_logs(window) -> QWidget:
                 return f
             self._rules = [
                 (QRegularExpression(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[,\.]?\d*"), fmt(FG_MUTE)),
-                (QRegularExpression(r"\b(CRITICAL|FATAL)\b"), fmt("#ff9aa2", True)),
+                (QRegularExpression(r"\b(CRITICAL|FATAL)\b"), fmt("#e6a39c", True)),
                 (QRegularExpression(r"\b(ERROR|ERR)\b"),      fmt(ERR, True)),
                 (QRegularExpression(r"\b(WARN(ING)?)\b"),     fmt(WARN, True)),
                 (QRegularExpression(r"\b(INFO)\b"),           fmt(ACCENT, True)),
                 (QRegularExpression(r"\b(DEBUG|TRACE)\b"),    fmt(FG_DIM, True)),
                 (QRegularExpression(r"\[[\w\.\-]+\]"),        fmt(OK)),
-                (QRegularExpression(r'^\s*File\s+".+?",\s+line\s+\d+.*$'), fmt("#b892ff")),
+                (QRegularExpression(r'^\s*File\s+".+?",\s+line\s+\d+.*$'), fmt("#c495d4")),
                 (QRegularExpression(r"^\s*Traceback \(most recent call last\):.*$"), fmt(ERR, True)),
                 (QRegularExpression(r"^\s*\w*(Error|Exception):.*$"), fmt(ERR)),
                 (QRegularExpression(r"https?://\S+"),         fmt(ACCENT)),
-                (QRegularExpression(r"\b\d+(\.\d+)?\b"),      fmt("#a8b3c7")),
+                (QRegularExpression(r"\b\d+(\.\d+)?\b"),      fmt("#b8c4b8")),
             ]
 
         def highlightBlock(self, text: str) -> None:
@@ -1872,12 +1872,12 @@ def _build_logs(window) -> QWidget:
         f" border-radius: 6px; font-family: 'JetBrains Mono', Consolas, monospace;"
         f" font-size: 11.5px; padding: 6px 8px; selection-background-color: {ACCENT};"
         f" selection-color: #000; }}"
-        f"QScrollBar:vertical {{ background: #151b28; width: 14px; margin: 2px 0; border: none; }}"
-        f"QScrollBar::handle:vertical {{ background: #4a5a82; border-radius: 5px; min-height: 28px; }}"
-        f"QScrollBar::handle:vertical:hover {{ background: #6b82b8; }}"
-        f"QScrollBar:horizontal {{ background: #151b28; height: 14px; margin: 0 2px; border: none; }}"
-        f"QScrollBar::handle:horizontal {{ background: #4a5a82; border-radius: 5px; min-width: 28px; }}"
-        f"QScrollBar::handle:horizontal:hover {{ background: #6b82b8; }}"
+        f"QScrollBar:vertical {{ background: #151815; width: 14px; margin: 2px 0; border: none; }}"
+        f"QScrollBar::handle:vertical {{ background: #4a5e4a; border-radius: 5px; min-height: 28px; }}"
+        f"QScrollBar::handle:vertical:hover {{ background: #647c64; }}"
+        f"QScrollBar:horizontal {{ background: #151815; height: 14px; margin: 0 2px; border: none; }}"
+        f"QScrollBar::handle:horizontal {{ background: #4a5e4a; border-radius: 5px; min-width: 28px; }}"
+        f"QScrollBar::handle:horizontal:hover {{ background: #647c64; }}"
         f"QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}"
         f"QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}"
     )
